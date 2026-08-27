@@ -1,0 +1,32 @@
+[project]
+name = "opportunity-radar"
+version = "0.1.0"
+description = "Discovers awards, grants, and events relevant to Recykal and evaluates eligibility against the business profile."
+requires-python = ">=3.11"
+dependencies = [
+    # Reasoning loop (Discovery Agent, Stage 3) and the callback plumbing tracing rides on.
+    "langgraph>=0.6",
+    "langchain-core>=0.3",
+    # langfuse.langchain.CallbackHandler imports the `langchain` meta-package.
+    "langchain>=0.3",
+    # OpenRouter is OpenAI-compatible; the model id comes from OPENROUTER_MODEL, never hardcoded.
+    "langchain-openai>=0.3",
+    # Every LLM call is traced from Stage 0 onward.
+    "langfuse>=3.0",
+    # Storage (Stage 1). PyMongo's native async API (AsyncMongoClient), not Motor —
+    # Motor is past end-of-life.
+    "pymongo>=4.13",
+    # Discovery tools (Stage 3) — installed now so Stage 1 config can name their keys.
+    "tavily-python>=0.5",
+    "firecrawl-py>=2.0",
+    # Config.
+    "python-dotenv>=1.0",
+    "pydantic>=2.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opportunity_radar"]
