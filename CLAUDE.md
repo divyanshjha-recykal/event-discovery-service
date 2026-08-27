@@ -21,7 +21,7 @@ Two LLM-driven components, everything else is a plain function:
 - **Eligibility Agent** — one call, `evaluate(opportunity, business_profile)`. Reasons per criterion, not one overall verdict.
 - **`extract(scraped_text, source_url)`** — plain function. Returns a valid record or a typed failure. Typed failure reasons: `insufficient_content` (page doesn't have enough to build a valid record) or `opportunity_closed` (page makes clear the opportunity is no longer open — Discovery should have caught this already, this is the second line of defense, not the primary one). JSON mode, one retry, then fail named, never guess.
 - **`save_opportunity(record)`** — plain function, atomic upsert. See schema below for the identity key.
-- **Program registry** — `due_soon()`, `record_edition()`, `known_orgs()`, plain functions over one collection.
+- **Program registry** — `due_soon(lookahead_months=1)`, `record_edition()`, `known_orgs()`, plain functions over one collection, `programs`, never `opportunities`. `due_soon()` returns programs whose `typical_window` is currently active or opens within `lookahead_months`; a null `typical_window` (fewer than two recorded editions) never qualifies.
 
 ## Data schemas
 
@@ -56,7 +56,7 @@ Identity key: `organizing_body + base_title + cycle_year`. Same identity on writ
 }
 ```
 
-Identity key: `organizing_body + base_title` (no year). New edition for an existing identity appends to `editions` and recomputes `typical_window`.
+Identity key: `organizing_body + base_title` (no year). New edition for an existing identity appends to `editions` and recomputes `typical_window`. Identity matching normalizes (unaccent, lowercase, strip punctuation/leading articles) before comparing, not exact string match. Known limit: acronym punctuation drift, `C.I.I.` and `CII` normalize to different strings and won't match. Accepted for Phase 1, an alias table would fix it but trades this rare collision for curation overhead with no clean punctuation rule that doesn't break some other case.
 
 **Eligibility result**, attached to the opportunity record after `evaluate()` runs:
 
