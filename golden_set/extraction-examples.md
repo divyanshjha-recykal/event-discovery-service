@@ -32,7 +32,7 @@ Real pages, fetched and saved on August 26, 2026. Saved now rather than at Stage
 ```
 title: "CII 4R Awards 2026"
 organizing_body: "CII" (Confederation of Indian Industry)
-base_title: "4R Awards"
+base_title: "CII 4R Awards"
 cycle_year: 2026
 category: "award"
 eligibility_criteria: [
@@ -108,7 +108,7 @@ source_url: "https://www.ciiwaste2worth.com/4R-excellence-categories.php"
 ```
 title: "Navarra Circular Economy Awards 2026"
 organizing_body: "Regional Development Agency of Navarre"
-base_title: "Circular Economy Awards"
+base_title: "Navarra Circular Economy Awards"
 cycle_year: 2026
 category: "grant"   # a financial award to fund project development, closer to a grant than a recognition-only award
 eligibility_criteria: [
