@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -105,12 +106,81 @@ def _parse_json(raw: str) -> dict:
     return json.loads(text)
 
 
+def _as_text(value) -> str:
+    """A model field as a clean string, whatever shape the model returned.
+
+    Models do not always honour the schema: a string field can come back as a
+    dict, a list, or a number. Coerce rather than assume, because assuming here
+    is what raised a KeyError mid-run and killed a whole Discovery pass.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return " ".join(_as_text(v) for v in value).strip()
+    if isinstance(value, dict):
+        # A common shape is {"name": ...} or {"value": ...}; otherwise give up
+        # cleanly rather than stringifying a whole dict into the record.
+        for key in ("value", "name", "text", "title"):
+            if key in value:
+                return _as_text(value[key])
+        return ""
+    return ""
+
+
+def _as_date_string(value) -> str | None:
+    """An ISO date string, or None if the model returned something else."""
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict):
+        # {"start": ..., "end": ...} / {"date": ...} — take the operative one.
+        for key in ("date", "deadline", "end", "start", "value"):
+            if key in value and isinstance(value[key], str):
+                return value[key].strip() or None
+    return None
+
+
+def _as_criteria(value) -> list[str]:
+    """Eligibility criteria as a list of separate condition strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, dict):
+        return [_as_text(v) for v in value.values() if _as_text(v)]
+    if isinstance(value, (list, tuple)):
+        return [text for v in value if (text := _as_text(v))]
+    return []
+
+
 def extract(
     scraped_text: str,
     source_url: str,
     model: str | None = None,
 ) -> OpportunityRecord | ExtractionFailure:
-    """Build one opportunity record from page text, or fail with a named reason."""
+    """Build one opportunity record from page text, or fail with a named reason.
+
+    Guaranteed never to raise: the contract is a record or a typed failure, and
+    an exception escaping here takes down the whole Discovery run around it.
+    """
+    try:
+        return _extract(scraped_text, source_url, model)
+    except Exception as exc:  # noqa: BLE001 — the contract is "never raises"
+        return ExtractionFailure(
+            FailureReason.MALFORMED_RESPONSE,
+            f"unexpected {type(exc).__name__} during extraction: {exc}",
+            source_url,
+        )
+
+
+def _extract(
+    scraped_text: str,
+    source_url: str,
+    model: str | None = None,
+) -> OpportunityRecord | ExtractionFailure:
     if not scraped_text or len(scraped_text.strip()) < MIN_CONTENT_CHARS:
         return ExtractionFailure(
             FailureReason.INSUFFICIENT_CONTENT,
@@ -172,9 +242,16 @@ def extract(
             source_url,
         )
 
+    if not isinstance(payload, dict):
+        return ExtractionFailure(
+            FailureReason.MALFORMED_RESPONSE,
+            f"model returned {type(payload).__name__}, expected a JSON object",
+            source_url,
+        )
+
     # Fields the model does not get the final word on.
-    raw_title = str(payload.get("title") or "").strip()
-    raw_base = str(payload.get("base_title") or raw_title).strip()
+    raw_title = _as_text(payload.get("title"))
+    raw_base = _as_text(payload.get("base_title")) or raw_title
     if not raw_title:
         return ExtractionFailure(
             FailureReason.INSUFFICIENT_CONTENT, "no title found on the page", source_url
@@ -187,7 +264,10 @@ def extract(
             FailureReason.MALFORMED_RESPONSE, f"unusable base_title: {exc}", source_url
         )
 
-    deadline = payload.get("submission_deadline") or None
+    # Models sometimes return a date as an object ({"start": ..., "end": ...}) or
+    # a list. Anything that is not a plain string is not a date we can ground, so
+    # it becomes None and the record is stored unverified rather than crashing.
+    deadline = _as_date_string(payload.get("submission_deadline"))
     grounding = verify_deadline(deadline, scraped_text)
 
     try:
@@ -197,11 +277,11 @@ def extract(
             base_title=base,
             cycle_year=payload.get("cycle_year"),
             category=payload.get("category"),
-            eligibility_criteria=payload.get("eligibility_criteria") or [],
+            eligibility_criteria=_as_criteria(payload.get("eligibility_criteria")),
             submission_deadline=deadline,
-            deadline_note=payload.get("deadline_note"),
+            deadline_note=_as_text(payload.get("deadline_note")) or None,
             deadline_verified=grounding.verified,
-            event_date=payload.get("event_date") or None,
+            event_date=_as_date_string(payload.get("event_date")),
             source_url=source_url,
         )
     except Exception as exc:  # pydantic ValidationError and friends
@@ -212,6 +292,53 @@ def extract(
         )
 
     return record
+
+
+def record_warnings(record: OpportunityRecord, today: date | None = None) -> list[str]:
+    """Quality warnings on a valid record. Warnings, never rejections.
+
+    A record can be perfectly well-formed and still be a poor find: a past
+    edition, or no deadline at all because a landing page was scraped instead of
+    the call for entries. These need to be visible, but not blocked —
+    a genuinely rolling programme legitimately has no fixed deadline, and a past
+    edition is still worth storing, because the program registry needs edition
+    history to compute `typical_window` and predict the next cycle.
+    """
+    today = today or date.today()
+    warnings: list[str] = []
+
+    if (edition := base_title_warning(record)) is not None:
+        warnings.append(edition)
+
+    if record.cycle_year < today.year:
+        warnings.append(
+            f"cycle_year {record.cycle_year} is before the current year "
+            f"({today.year}) — past edition, useful for the program registry "
+            "but not actionable"
+        )
+
+    if record.submission_deadline is None and not record.deadline_note:
+        warnings.append(
+            "no submission_deadline and no deadline_note — often a sign the "
+            "landing page was scraped rather than the call for entries"
+        )
+    elif record.submission_deadline:
+        try:
+            if date.fromisoformat(record.submission_deadline) < today:
+                warnings.append(
+                    f"submission_deadline {record.submission_deadline} has "
+                    "already passed — not actionable"
+                )
+        except ValueError:
+            pass
+
+    if record.submission_deadline and not record.deadline_verified:
+        warnings.append(
+            f"deadline {record.submission_deadline} could not be grounded in "
+            "the source text — treat it as unconfirmed"
+        )
+
+    return warnings
 
 
 def base_title_warning(record: OpportunityRecord) -> str | None:

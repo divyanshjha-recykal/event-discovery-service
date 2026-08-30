@@ -1,7 +1,7 @@
 """Extraction — turning scraped page text into a validated opportunity record."""
 
 from .base_title import edition_residue, strip_edition
-from .extract import base_title_warning, extract
+from .extract import base_title_warning, extract, record_warnings
 from .failures import ExtractionFailure, FailureReason
 from .golden import GoldenExample, GoldenSetError, load_examples
 from .grounding import GroundingResult, verify_deadline
@@ -15,6 +15,7 @@ __all__ = [
     "GroundingResult",
     "OpportunityRecord",
     "base_title_warning",
+    "record_warnings",
     "edition_residue",
     "extract",
     "load_examples",

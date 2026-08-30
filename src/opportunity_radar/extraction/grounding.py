@@ -83,6 +83,17 @@ def verify_deadline(deadline: str | None, source_text: str) -> GroundingResult:
     """
     if not deadline:
         return GroundingResult(False, None, "no deadline extracted")
+
+    # Type-guard before slicing. A model can return submission_deadline as a
+    # dict ({"start": ..., "end": ...}) or a list, and slicing a dict raises
+    # KeyError — which is not a ValueError, so it escaped the handler below and
+    # took down a whole Discovery run.
+    if not isinstance(deadline, str):
+        return GroundingResult(
+            False, None,
+            f"deadline is {type(deadline).__name__}, expected an ISO date string"
+        )
+
     if not source_text or not source_text.strip():
         return GroundingResult(False, None, "no source text to check against")
 

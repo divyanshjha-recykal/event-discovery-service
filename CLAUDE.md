@@ -17,10 +17,10 @@ Build a pipeline that discovers awards, grants, and events relevant to Recykal, 
 
 Two LLM-driven components, everything else is a plain function:
 
-- **Discovery Agent** — tools: `search(query)`, `scrape(url)`, `read_memory()`, `save_opportunity(record)`. Given a tool-call budget per run, decides what to search and what's worth pursuing, calls `extract()` on genuine finds.
+- **Discovery Agent** — tools: `search(query)`, `scrape(url)`, `extract(url)`, `read_memory()`, `save_opportunity(record)`. Given a tool-call budget per run, decides what to search and what's worth pursuing before calling `extract()` on a genuine find; extraction stays a visible, separate step in the trace, never folded into `scrape` or `save_opportunity`. `read_memory()` returns a distilled block, sub-sectors, geography, recognition history, pulled from `BusinessProfile.md` by a plain function, not the full document and not an LLM summary of it — Eligibility gets the full profile because any field could matter to any criterion, Discovery's need is narrower and known in advance, and it's called every loop turn, not once.
 - **Eligibility Agent** — one call, `evaluate(opportunity, business_profile)`. Reasons per criterion, not one overall verdict.
-- **`extract(scraped_text, source_url)`** — plain function. Returns a valid record or a typed failure. Typed failure reasons: `insufficient_content` (page itself is too thin to build a record from), `opportunity_closed` (page makes clear the opportunity is no longer open — Discovery should have caught this already, this is the second line of defense, not the primary one), or `malformed_response` (the page was fine, the model's reply wasn't — unparseable JSON after retry, a base_title that won't normalise, or a record that fails schema validation). JSON mode, one retry, then fail named, never guess.
-- **`save_opportunity(record)`** — plain function, atomic upsert. See schema below for the identity key.
+- `extract(scraped_text, source_url)` — plain function. Returns a valid record or a typed failure. Typed failure reasons: `insufficient_content` (page itself is too thin to build a record from), `opportunity_closed` (page makes clear the opportunity is no longer open — Discovery should have caught this already, this is the second line of defense, not the primary one), or `malformed_response` (the page was fine, the model's reply wasn't — unparseable JSON after retry, a base_title that won't normalise, or a record that fails schema validation). JSON mode, one retry, then fail named, never guess.
+- `save_opportunity(record)` — plain function, atomic upsert. See schema below for the identity key.
 - **Program registry** — `due_soon(lookahead_months=1)`, `record_edition()`, `known_orgs()`, plain functions over one collection, `programs`, never `opportunities`. `due_soon()` returns programs whose `typical_window` is currently active or opens within `lookahead_months`; a null `typical_window` (fewer than two recorded editions) never qualifies.
 
 ## Data schemas
@@ -41,6 +41,7 @@ Two LLM-driven components, everything else is a plain function:
   event_date: str | null,
   source_url: str
 }
+
 ```
 
 Identity key: `organizing_body + base_title + cycle_year`. Same identity on write → update existing record. New identity → insert. Never a duplicate.
@@ -54,6 +55,7 @@ Identity key: `organizing_body + base_title + cycle_year`. Same identity on writ
   editions: [ { year: int, deadline: str } ],
   typical_window: { month_start: int, month_end: int } | null   # null until 2+ editions exist
 }
+
 ```
 
 Identity key: `organizing_body + base_title` (no year). New edition for an existing identity appends to `editions` and recomputes `typical_window`. Identity matching normalizes (unaccent, lowercase, strip punctuation/leading articles) before comparing, not exact string match. Known limit: acronym punctuation drift, `C.I.I.` and `CII` normalize to different strings and won't match. Accepted for Phase 1, an alias table would fix it but trades this rare collision for curation overhead with no clean punctuation rule that doesn't break some other case.
@@ -69,6 +71,7 @@ Identity key: `organizing_body + base_title` (no year). New edition for an exist
   confidence: "high" | "low",   # derived from criteria_results, never self-reported by the model
   score: float | null           # met / (met + not_met), unclear excluded, null if no fact-checkable criteria
 }
+
 ```
 
 ## Development stages
@@ -79,7 +82,7 @@ Identity key: `organizing_body + base_title` (no year). New edition for an exist
 
 **Stage 2 — Extraction.** Implement `extract()` against the Stage 0 golden set. Implement the `deadline_verified` grounding check: the day and month of the extracted deadline must match verbatim near deadline language in the source text; the year may be inferred from page context (title, publish date) without failing the check, that's reasonable inference, not hallucination. `opportunity_closed` typed failures are a second line of defense behind Discovery's own relevance judgment, not the primary check, don't rely on this catching everything Discovery should have filtered. Run the golden set through more than one `OPENROUTER_MODEL` value and compare schema-compliance rate and `deadline_verified` accuracy before Stage 3 starts. Done when: every golden set page produces either a schema-valid record or a named typed failure (`insufficient_content`, `opportunity_closed`, or `malformed_response`), never a malformed or partial record; Example 2 in the golden set produces `opportunity_closed`, not a valid record.
 
-**Stage 3 — Discovery Agent.** Wire `search`, `scrape`, `read_memory`, `save_opportunity` as real tools around a reasoning loop. Enforce the tool-call budget as a hard stop, not a suggestion. Run at least one full live run against real Tavily/Firecrawl calls, across at least two `OPENROUTER_MODEL` values, before picking a default. Done when: a live run, unattended, produces at least one real opportunity that was not in the golden set, correctly deduplicates on a second run of the same query set, stays within budget, and the full run is visible as a trace in Langfuse, tool call by tool call.
+**Stage 3 — Discovery Agent.** Wire `search`, `scrape`, `extract`, `read_memory`, `save_opportunity` as real tools around a reasoning loop. Enforce the tool-call budget as a hard stop, not a suggestion, alongside a wall-clock timeout and per-provider call caps, the budget alone doesn't catch a hung call or a lopsided run. Run at least one full live run against real Tavily/Firecrawl calls, across at least two `OPENROUTER_MODEL` values, before picking a default. Done when: a live run, unattended, produces at least one real opportunity that was not in the golden set, correctly deduplicates on a second run of the same query set, stays within budget, and the full run is visible as a trace in Langfuse, tool call by tool call.
 
 **Stage 4 — Eligibility Agent.** Implement `evaluate()` per the eligibility result schema above. Run it against the Stage 0 reference criteria sets before running it against anything Stage 3 discovered. Done when: every reference criteria set produces the expected verdict path (met/not_met/unclear) as written by hand in Stage 0, and the qualitative criterion never appears inside `score`.
 
