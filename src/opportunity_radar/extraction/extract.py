@@ -72,8 +72,27 @@ nothing else. Do not drop place names, organiser names or any other words: \
 apply the same rule regardless of what words happen to appear in the title.
   cycle_year            integer year of THIS edition
   category              "award" | "grant" | "event" | "conference"
-  eligibility_criteria  array of separate conditions, each its own string. \
-Never return one long paragraph. Return [] if the page states none.
+  eligibility_criteria  array of conditions an applicant must satisfy. \
+Return [] if the page states none.
+
+    Each entry must be ONE complete, independently checkable condition, \
+written so it still makes sense on its own with no surrounding context.
+
+    Do not split a single sentence into fragments. "Any organization of any \
+type or size, from any industry, in any country" is ONE condition, not three. \
+A fragment like "From any industry" cannot be judged on its own.
+
+    Keep alternatives together in one entry. "Open to individuals or \
+institutions" is ONE condition — splitting it into "Individuals" and \
+"Institutions" turns a choice into two requirements, and an applicant that is \
+one but not the other then looks half-ineligible.
+
+    Do not return a paragraph either. If a sentence genuinely states several \
+separate requirements ("must be registered in India, and must have three \
+years of operating history"), split it there.
+
+    Only include conditions for ENTERING. A list of who attends, who speaks, \
+or which job titles the audience holds is not eligibility.
   submission_deadline   "YYYY-MM-DD" or null
   deadline_note         a short note if the deadline is relative or rolling \
 (e.g. "rolling", "30 days after announcement"), otherwise null
