@@ -26,7 +26,7 @@ from datetime import date
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from ..tracing import chat_model, trace_handler
+from ..tracing import chat_model, stage_span, trace_handler
 from .base_title import edition_residue, strip_edition
 from .failures import ExtractionFailure, FailureReason
 from .grounding import verify_deadline
@@ -185,14 +185,38 @@ def extract(
     Guaranteed never to raise: the contract is a record or a typed failure, and
     an exception escaping here takes down the whole Discovery run around it.
     """
-    try:
-        return _extract(scraped_text, source_url, model)
-    except Exception as exc:  # noqa: BLE001 — the contract is "never raises"
-        return ExtractionFailure(
-            FailureReason.MALFORMED_RESPONSE,
-            f"unexpected {type(exc).__name__} during extraction: {exc}",
-            source_url,
-        )
+    from urllib.parse import urlparse
+
+    host = urlparse(source_url).netloc or source_url
+    with stage_span(
+        f"stage2.extract: {host}", source_url=source_url, model=model,
+        page_chars=len(scraped_text or ""),
+    ) as span:
+        try:
+            result = _extract(scraped_text, source_url, model)
+        except Exception as exc:  # noqa: BLE001 — the contract is "never raises"
+            result = ExtractionFailure(
+                FailureReason.MALFORMED_RESPONSE,
+                f"unexpected {type(exc).__name__} during extraction: {exc}",
+                source_url,
+            )
+
+        # The outcome on the span, so a trace shows what extraction decided
+        # without anyone opening the payload.
+        if isinstance(result, ExtractionFailure):
+            span.update(metadata={"outcome": "failed", "reason": result.reason.value,
+                                  "detail": result.detail[:200]})
+        else:
+            span.update(metadata={
+                "outcome": "ok",
+                "title": result.title,
+                "cycle_year": result.cycle_year,
+                "category": result.category,
+                "submission_deadline": result.submission_deadline,
+                "deadline_verified": result.deadline_verified,
+                "criteria_count": len(result.eligibility_criteria),
+            })
+        return result
 
 
 def _extract(
@@ -220,6 +244,11 @@ def _extract(
 
     # JSON mode, one retry. The retry feeds the error back rather than simply
     # asking again, so the second attempt has something to correct.
+    #
+    # The retry covers schema validation as well as JSON parsing. A model that
+    # emits cycle_year: -1 once will very likely emit 2026 when told what was
+    # wrong — an earlier version only retried parse errors, so that record was
+    # lost outright after the scrape had already been paid for.
     for attempt in (1, 2):
         try:
             response = llm.invoke(
@@ -228,27 +257,45 @@ def _extract(
                 response_format={"type": "json_object"},
             )
             payload = _parse_json(response.content)
-            break
         except json.JSONDecodeError as exc:
             last_error = f"model did not return valid JSON: {exc}"
+            payload = None
         except Exception as exc:  # noqa: BLE001 — reported, not handled
             last_error = f"{type(exc).__name__}: {exc}"
+            payload = None
+
+        if payload is not None:
+            outcome = _build_record(payload, scraped_text, source_url)
+            # Only a malformed reply is worth a second attempt. A closed page
+            # and a page with nothing on it are settled answers, not mistakes.
+            if (
+                not isinstance(outcome, ExtractionFailure)
+                or outcome.reason is not FailureReason.MALFORMED_RESPONSE
+                or attempt == 2
+            ):
+                return outcome
+            last_error = outcome.detail
 
         if attempt == 1:
             messages.append(
                 HumanMessage(
                     f"That response could not be used ({last_error}). "
-                    "Reply again with only the JSON object described above."
+                    "Correct exactly that problem and reply again with only the "
+                    "JSON object described above."
                 )
             )
 
-    if payload is None:
-        return ExtractionFailure(
-            FailureReason.MALFORMED_RESPONSE,
-            f"no usable response after one retry — {last_error}",
-            source_url,
-        )
+    return ExtractionFailure(
+        FailureReason.MALFORMED_RESPONSE,
+        f"no usable response after one retry — {last_error}",
+        source_url,
+    )
 
+
+def _build_record(
+    payload: dict, scraped_text: str, source_url: str
+) -> OpportunityRecord | ExtractionFailure:
+    """Turn a parsed model reply into a record, or say why it cannot be one."""
     # Closed check: the model's semantic judgement, with the regex behind it.
     model_status = str(payload.get("status", "")).strip().lower()
     phrase = _CLOSED_PHRASES.search(scraped_text)

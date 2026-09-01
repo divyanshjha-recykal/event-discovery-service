@@ -12,11 +12,16 @@ without calling anything.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import uuid4
 
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 
-from ..storage import save_opportunity as store_opportunity
+from ..storage import (
+    finish_run,
+    save_opportunity as store_opportunity,
+    start_run,
+)
 from ..tracing import chat_model, langfuse_client, trace_handler
 from .budget import RunBudget
 from .tools import DiscoveryContext, build_tools
@@ -181,6 +186,7 @@ def _nudge(context, budget) -> str:
 
 @dataclass
 class DiscoveryRun:
+    run_id: str
     model: str
     budget: RunBudget
     saved: list[str]
@@ -191,6 +197,8 @@ class DiscoveryRun:
     trace_url: str | None
     pages_scraped: int
     records_extracted: int
+    journey: list[dict]
+    thinking: list[str]
 
 
 async def run_discovery(
@@ -199,11 +207,30 @@ async def run_discovery(
     model: str | None = None,
     budget: RunBudget | None = None,
     dry_run: bool = False,
+    run_id: str | None = None,
 ) -> DiscoveryRun:
     """One Discovery run. Returns what happened; raises nothing on budget stop."""
     budget = budget or RunBudget()
-    context = DiscoveryContext(db=db, budget=budget, model=model, dry_run=dry_run)
+    run_id = run_id or uuid4().hex
+    label = model or "(OPENROUTER_MODEL)"
+
+    context = DiscoveryContext(
+        db=db, budget=budget, model=model, dry_run=dry_run, run_id=run_id
+    )
     tools = build_tools(context)
+
+    # Recorded before the loop starts so a UI can show the run as in-progress,
+    # and so a crash still leaves the journey it got through.
+    try:
+        await start_run(
+            db, run_id, label,
+            {"tool_calls": budget.tool_calls, "max_searches": budget.max_searches,
+             "max_scrapes": budget.max_scrapes,
+             "wall_clock_seconds": budget.wall_clock_seconds},
+            queries,
+        )
+    except Exception:  # noqa: BLE001 — telemetry never blocks a run
+        pass
 
     llm = chat_model(model, max_tokens=MAX_OUTPUT_TOKENS, timeout=120, max_retries=3)
     # langchain.agents.create_agent, not langgraph.prebuilt.create_react_agent —
@@ -226,10 +253,14 @@ async def run_discovery(
     trace_url = None
     summary = ""
     auto_saved: list[str] = []
+    thinking: list[str] = []
 
     with client.start_as_current_observation(
-        name=f"discovery:{model or 'default'}", as_type="span"
+        name=f"stage3.discovery:{label}", as_type="span"
     ):
+        # Available to the tools immediately, so a persisted extraction failure
+        # can link straight to the trace that produced it.
+        context.trace_url = client.get_trace_url(trace_id=client.get_current_trace_id())
         config = {
             "callbacks": [handler],
             # Absolute ceiling: the budget stops tool calls, this stops
@@ -243,6 +274,13 @@ async def run_discovery(
                 result = await agent.ainvoke({"messages": messages}, config=config)
                 messages = result.get("messages", messages)
                 summary = messages[-1].content if messages else ""
+                thinking = [
+                    m.content.strip()
+                    for m in messages
+                    if getattr(m, "type", "") == "ai"
+                    and isinstance(getattr(m, "content", ""), str)
+                    and m.content.strip()
+                ]
 
                 # Early-stop guard. Models differ wildly in persistence: one will
                 # run four searches before concluding, another gives up after one
@@ -277,7 +315,29 @@ async def run_discovery(
 
     client.flush()
 
+    counts = {
+        "searched": budget.searches,
+        "scraped": len(context.pages),
+        "extracted": len(context.records),
+        "saved": len(context.saved),
+        "failed": len(context.failures),
+    }
+    try:
+        await finish_run(
+            db, run_id,
+            "failed" if summary.startswith("RUN ENDED EARLY") else "completed",
+            summary, trace_url,
+            {"tool_calls": budget.tool_calls, "spent": budget.spent,
+             "searches": budget.searches, "scrapes": budget.scrapes,
+             "elapsed": round(budget.elapsed, 1),
+             "stop_reason": budget.stop_reason},
+            counts, thinking,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     return DiscoveryRun(
+        run_id=run_id,
         model=model or "(OPENROUTER_MODEL)",
         budget=budget,
         saved=context.saved,
@@ -288,4 +348,6 @@ async def run_discovery(
         trace_url=trace_url,
         pages_scraped=len(context.pages),
         records_extracted=len(context.records),
+        journey=context.journey,
+        thinking=thinking,
     )

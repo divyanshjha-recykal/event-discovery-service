@@ -16,6 +16,8 @@ from .schema import Confidence, CriterionResult, QualitativeNote
 # actually fact-checkable. The risk being guarded against is a model relabelling
 # "must be a registered non-profit" as a soft contextual note to avoid
 # committing to not_met. Flags only — the model's classification always stands.
+_ORDINAL_PREFIX = re.compile(r"^\s*\(?\d+[.)\]]?\s+")
+
 _FACTUAL_MARKERS = re.compile(r"\b\d+\b|\bmust\b", re.IGNORECASE)
 
 
@@ -61,7 +63,10 @@ def audit_classification(qualitative_notes: list[QualitativeNote]) -> list[str]:
     """
     flagged = []
     for note in qualitative_notes:
-        match = _FACTUAL_MARKERS.search(note.criterion)
+        # A leading list number is not evidence of anything. Flagging on it
+        # produced "contains '7'" on every numbered criterion.
+        subject = _ORDINAL_PREFIX.sub("", note.criterion)
+        match = _FACTUAL_MARKERS.search(subject)
         if match:
             flagged.append(
                 f"{note.criterion!r} was filed as qualitative but contains "

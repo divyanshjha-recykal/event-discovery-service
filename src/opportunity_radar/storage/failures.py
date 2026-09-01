@@ -32,6 +32,7 @@ async def record_extraction_failure(
     reason: str,
     detail: str,
     model: str | None = None,
+    trace_url: str | None = None,
 ) -> dict:
     """Upsert one failed extraction. Repeat failures increment `attempts`."""
     now = datetime.now(timezone.utc)
@@ -42,6 +43,7 @@ async def record_extraction_failure(
                 "reason": reason,
                 "detail": detail,
                 "model": model,
+                "trace_url": trace_url,
                 "last_seen": now,
             },
             "$setOnInsert": {"source_url": source_url, "first_seen": now},

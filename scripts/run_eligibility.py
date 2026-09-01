@@ -22,7 +22,12 @@ from opportunity_radar.eligibility import (
     load_criteria_sets,
 )
 from opportunity_radar.profile import load_business_profile
-from opportunity_radar.storage import OPPORTUNITIES, get_client, get_database
+from opportunity_radar.storage import (
+    OPPORTUNITIES,
+    attach_eligibility,
+    get_client,
+    get_database,
+)
 
 
 def _force_utf8() -> None:
@@ -90,11 +95,15 @@ async def check_stored(profile_text: str, model: str | None) -> None:
         return
 
     client = get_client(config)
+    db = get_database(client, config)
     try:
-        db = get_database(client, config)
         docs = [d async for d in db[OPPORTUNITIES].find({})]
+        await _evaluate_and_store(db, docs, profile_text, model)
     finally:
         await client.close()
+
+
+async def _evaluate_and_store(db, docs, profile_text: str, model: str | None) -> None:
 
     print(f"\n{'=' * 72}\nSTORED OPPORTUNITIES ({len(docs)})\n{'=' * 72}")
     for doc in docs:
@@ -125,6 +134,11 @@ async def check_stored(profile_text: str, model: str | None) -> None:
             print(f"      [note    ] {n.criterion[:72]}")
         for flag in result.classification_flags:
             print(f"      ! {flag}")
+
+        # Persisted so Stage 5 can read verdicts from Mongo. CLAUDE.md puts the
+        # eligibility result on the opportunity record itself.
+        await attach_eligibility(db, doc["source_url"], result.model_dump())
+        print("      (verdict saved to the opportunity record)")
 
 
 async def main() -> int:

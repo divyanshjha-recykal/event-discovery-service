@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
@@ -59,3 +60,20 @@ async def save_opportunity(db: AsyncDatabase, record: dict) -> SaveResult:
         )
 
     return SaveResult(document=document, inserted=inserted)
+
+
+async def attach_eligibility(
+    db: AsyncDatabase, source_url: str, result: dict
+) -> dict | None:
+    """Store an eligibility verdict on its opportunity record.
+
+    CLAUDE.md's schema puts the eligibility result on the opportunity itself
+    rather than in its own collection, so Stage 5 can read an opportunity and
+    its verdict together. Keyed on source_url because that is what the caller
+    holds after evaluating a stored record.
+    """
+    return await db[OPPORTUNITIES].find_one_and_update(
+        {"source_url": source_url},
+        {"$set": {"eligibility": result, "eligibility_evaluated_at": datetime.now(timezone.utc)}},
+        return_document=ReturnDocument.AFTER,
+    )

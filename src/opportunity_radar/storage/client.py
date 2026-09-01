@@ -44,3 +44,10 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
         unique=True,
         name="program_identity",
     )
+    # Stage 5's collections. Imported here rather than at module scope to keep
+    # client.py free of cycles.
+    from .failures import ensure_failure_indexes
+    from .runs import ensure_run_indexes
+
+    await ensure_failure_indexes(db)
+    await ensure_run_indexes(db)

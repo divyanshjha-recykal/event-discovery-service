@@ -46,8 +46,7 @@ def main() -> int:
     # No read-back check here. Langfuse v4 removed the v3 trace read API
     # (api.trace.get / api.trace.list both 404), and v4 does not populate the
     # legacy ClickHouse `traces` table either. Confirm visually in the UI.
-    print(f"
-PASS - span written and flushed.")
+    print("\nPASS - span written and flushed.")
     print(f"Confirm at: {client.get_trace_url(trace_id=trace_id)}")
     return 0
 

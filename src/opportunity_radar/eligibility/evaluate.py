@@ -18,7 +18,7 @@ import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from ..tracing import chat_model, trace_handler
+from ..tracing import chat_model, stage_span, trace_handler
 from .schema import CriterionResult, EligibilityResult, QualitativeNote
 from .scoring import audit_classification, compute_score, derive_confidence
 
@@ -73,8 +73,25 @@ def _parse_json(raw: str) -> dict:
     return json.loads(text)
 
 
+_ORDINAL_PREFIX = re.compile(r"^\s*\(?\d+[.)\]]?\s+")
+
+
+def _strip_ordinal(text: str) -> str:
+    """Remove a leading list number the model may have prepended.
+
+    Belt and braces behind the un-numbered prompt: if a model numbers its
+    criteria anyway, the digits must not reach the stored criterion text, where
+    the classification audit would read them as factual markers and flag every
+    numbered criterion as suspicious.
+    """
+    return _ORDINAL_PREFIX.sub("", text).strip()
+
+
 def _user_prompt(criteria: list[str], business_profile: str, context: str) -> str:
-    listed = "\n".join(f"{i}. {c}" for i, c in enumerate(criteria, 1))
+    # Bulleted, not numbered. Numbering made the model echo "7. For ..." back
+    # into the criterion field, which tripped the audit on the list number
+    # rather than on anything factual.
+    listed = "\n".join(f"- {c}" for c in criteria)
     return (
         f"COMPANY PROFILE\n\n{business_profile}\n\n"
         f"{'=' * 60}\n\nOPPORTUNITY: {context}\n\n"
@@ -97,6 +114,21 @@ def evaluate_criteria(
     """
     if not criteria:
         raise ValueError("no criteria to evaluate")
+
+    with stage_span(
+        f"stage4.evaluate: {context[:60]}",
+        model=model, criteria_count=len(criteria),
+    ) as span:
+        return _evaluate(criteria, business_profile, context, model, span)
+
+
+def _evaluate(
+    criteria: list[str],
+    business_profile: str,
+    context: str,
+    model: str | None,
+    span,
+) -> EligibilityResult:
 
     llm = chat_model(model, max_tokens=MAX_OUTPUT_TOKENS, timeout=120, max_retries=3)
     handler = trace_handler()
@@ -134,7 +166,7 @@ def evaluate_criteria(
 
     results = [
         CriterionResult(
-            criterion=str(item.get("criterion", "")).strip(),
+            criterion=_strip_ordinal(str(item.get("criterion", ""))),
             status=str(item.get("status", "")).strip().lower(),
             reasoning=str(item.get("reasoning", "")).strip() or "(no reasoning given)",
         )
@@ -143,7 +175,7 @@ def evaluate_criteria(
     ]
     notes = [
         QualitativeNote(
-            criterion=str(item.get("criterion", "")).strip(),
+            criterion=_strip_ordinal(str(item.get("criterion", ""))),
             note=str(item.get("note", "")).strip() or "(no note given)",
         )
         for item in payload.get("qualitative_notes") or []
@@ -151,13 +183,21 @@ def evaluate_criteria(
     ]
 
     # Computed here, never taken from the model.
-    return EligibilityResult(
+    outcome = EligibilityResult(
         criteria_results=results,
         qualitative_notes=notes,
         confidence=derive_confidence(results),
         score=compute_score(results),
         classification_flags=audit_classification(notes),
     )
+    span.update(metadata={
+        "confidence": outcome.confidence,
+        "score": outcome.score,
+        **outcome.counts,
+        "qualitative": len(outcome.qualitative_notes),
+        "classification_flags": len(outcome.classification_flags),
+    })
+    return outcome
 
 
 def evaluate(opportunity, business_profile: str, model: str | None = None) -> EligibilityResult:
