@@ -22,6 +22,7 @@ from ..storage import (
     save_opportunity as store_opportunity,
     start_run,
 )
+from ..config import discovery_temperature
 from ..tracing import chat_model, langfuse_client, trace_handler
 from .budget import RunBudget
 from .tools import DiscoveryContext, build_tools
@@ -55,13 +56,32 @@ tend to fail are broad topic phrases like "circular economy companies".
    Do not conclude that nothing exists until you have tried at least four \
 genuinely different queries and still found nothing worth scraping.
 3. scrape() a promising result to read the actual page.
-4. Judge it yourself before spending anything else. Skip the page if:
+4. Judge it yourself before spending anything else. Skip the page ONLY if:
    - nominations, submissions or applications are closed;
    - the deadline has already passed;
-   - it is not something an Indian waste-management or circular-economy \
-technology company could enter;
-   - it is a news article or listicle about an award rather than the award's \
-own call for entries.
+   - it is a news article, listicle or results announcement about an award \
+rather than the award's own call for entries;
+   - there is genuinely no route in for a company at all — for example it is \
+open exclusively to individuals, students, or a country Recykal does not \
+operate in.
+
+   Those four are the whole list. Do not invent additional reasons to skip. \
+In particular, NONE of the following is a reason to skip:
+   - an entry or nomination fee, at any price. Recykal can decide whether to \
+pay; that is not your call;
+   - a programme with several award categories where only some fit. If ANY \
+category could fit, it qualifies — judge the programme, not its strictest \
+category;
+   - the Middle East or Gulf region. Recykal has an active Saudi partnership \
+and is expanding there;
+   - being large, well funded, or late stage, unless the page explicitly \
+limits entry by size, turnover or funding stage;
+   - a page that is merely thin or awkward. Extract it and let extraction \
+decide.
+
+   When you are genuinely unsure, EXTRACT. Extraction is one cheap call and a \
+later stage judges eligibility properly. A missed real opportunity costs far \
+more than a wasted extraction, and being too strict is the more likely mistake.
 
    Two things to get right here, because they are the most common way a run \
 produces technically-valid but useless records:
@@ -232,7 +252,11 @@ async def run_discovery(
     except Exception:  # noqa: BLE001 — telemetry never blocks a run
         pass
 
-    llm = chat_model(model, max_tokens=MAX_OUTPUT_TOKENS, timeout=120, max_retries=3)
+    kwargs = {"max_tokens": MAX_OUTPUT_TOKENS, "timeout": 120, "max_retries": 3}
+    temperature = discovery_temperature()
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    llm = chat_model(model, **kwargs)
     # langchain.agents.create_agent, not langgraph.prebuilt.create_react_agent —
     # the latter is deprecated in LangGraph v1 and removed in v2.
     system_prompt = SYSTEM_PROMPT + (DRY_RUN_NOTE if dry_run else "")

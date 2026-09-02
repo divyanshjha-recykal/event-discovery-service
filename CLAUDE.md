@@ -90,6 +90,12 @@ Identity key: `organizing_body + base_title` (no year). New edition for an exist
 
 **Stage 6 — End-to-end run.** Run Stages 3 through 5 back to back, unattended, against live sources. Fix whatever breaks. This is the state to be in for the September 7th presentation.
 
+## Known limitations, deferred
+
+**Alternative eligibility domains are scored as joint requirements.** `eligibility_criteria: [str]` is a flat list, so every consumer reads it as AND. A programme that offers several award categories — satisfy any one — is therefore scored as though the applicant must satisfy all of them. Observed on the IISD-CMI National Sustainability Awards, which lists 13 alternative categories: Recykal qualifies under Startup Sector Leadership and scored 0.17, marked `not_met` on requirements like "minimum age above 70" that belong to categories it was never entering.
+
+The per-criterion reasoning is correct in these cases; only the aggregate score misleads. Deferred rather than fixed because it has appeared in 1 of 11 records, and the fix is a two-level schema change (program-wide criteria that all apply, plus optional named tracks where any one may satisfy) landing too close to the September 7 presentation. Until then, Stage 5 shows per-criterion verdicts and reasoning rather than a headline score, so nothing rests on the misleading number.
+
 ## Not building this phase
 
 Auto-submission, multi-recipient notification routing, embedding-based matching, queue-based parallel scraping, an approve/reject review UI, a local Ollama fallback. Do not scaffold these preemptively, build only what the current stage requires.

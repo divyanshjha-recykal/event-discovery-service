@@ -55,6 +55,27 @@ class OpenRouterConfig:
         )
 
 
+def discovery_temperature() -> float | None:
+    """Sampling temperature for the Discovery Agent only.
+
+    Deliberately not applied to extraction or eligibility. Those must be
+    reproducible: eligibility is checked against fixed reference sets, and a
+    verdict that drifts between runs cannot be trusted or compared. Discovery is
+    the only stage where more exploration is arguably useful.
+
+    Unset means "use the provider default" rather than forcing 0, so this
+    changes nothing until it is set.
+    """
+    raw = optional("OPENROUTER_TEMPERATURE")
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return min(max(value, 0.0), 2.0)
+
+
 @dataclass(frozen=True)
 class LangfuseConfig:
     public_key: str

@@ -62,6 +62,7 @@ class DiscoveryContext:
     trace_url: str | None = None
 
     pages: dict[str, str] = field(default_factory=dict)             # url -> text
+    page_titles: dict[str, str] = field(default_factory=dict)       # url -> <title>
     records: dict[str, OpportunityRecord] = field(default_factory=dict)
     saved: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
@@ -236,6 +237,17 @@ def build_tools(context: DiscoveryContext) -> list[StructuredTool]:
                 return f"SCRAPE FAILED for {url}: {type(exc).__name__}: {exc}"
             text = getattr(doc, "markdown", None) or getattr(doc, "content", "") or ""
 
+            # Keep the page's own <title>. Some award sites render their name
+            # as an image, so the markdown has no text title at all and an
+            # otherwise complete record would be discarded over a missing name.
+            meta = getattr(doc, "metadata", None)
+            if meta is not None:
+                context.page_titles[url] = (
+                    getattr(meta, "title", None)
+                    or getattr(meta, "og_title", None)
+                    or ""
+                ).strip()
+
         if not text.strip():
             await _record("scrape", url=url, outcome="failed",
                           detail="page returned no readable text")
@@ -284,7 +296,8 @@ def build_tools(context: DiscoveryContext) -> list[StructuredTool]:
         # one bad page and the loss of an entire run's work. Belt and braces.
         try:
             result = await asyncio.to_thread(
-                extract_page, context.pages[url], url, context.model
+                extract_page, context.pages[url], url, context.model,
+                context.page_titles.get(url),
             )
         except Exception as exc:  # noqa: BLE001 — reported to the model, run continues
             context.failures.append(f"{url}: {type(exc).__name__}")

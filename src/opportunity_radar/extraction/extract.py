@@ -65,7 +65,14 @@ from the text of a single web page.
 Return ONLY a JSON object with exactly these keys:
 
   status                "open" | "closed" | "unclear"
-  title                 full title as written, including the year if present
+  title                 the opportunity's own name, including the year if \
+present. Where the page body has no readable title — some sites render their \
+name only as a logo image — the browser page title and meta description are \
+given to you as evidence. Use them ONLY when they genuinely name the \
+opportunity. A navigation label ("Home"), a CMS default ("Untitled Document"), \
+or the name of the site rather than the award is not a title: return null and \
+let the record be rejected. A wrongly-named record is worse than no record, \
+because the name is what identifies it later.
   organizing_body       the body that runs it, not the sponsor or the venue
   base_title            the title with year and edition markers removed, and \
 nothing else. Do not drop place names, organiser names or any other words: \
@@ -113,8 +120,29 @@ date when the deadline itself gives only a day and month.
 """
 
 
-def _user_prompt(scraped_text: str, source_url: str) -> str:
-    return f"Source URL: {source_url}\n\nPage text:\n\n{scraped_text}"
+def _user_prompt(
+    scraped_text: str,
+    source_url: str,
+    page_title: str | None = None,
+    page_description: str | None = None,
+) -> str:
+    """Everything the page says about itself, not just its markdown body.
+
+    Some sites render their name only as a logo image, so the markdown has no
+    readable title and a model asked to name the opportunity correctly finds
+    nothing. That information was never missing — it is in the page metadata,
+    which an earlier version of this code discarded.
+
+    Supplying it as evidence is the fix. A downstream fallback that substitutes
+    the raw <title> is not: "Home" would then become the record's name, and the
+    name feeds `base_title`, which is part of the identity key.
+    """
+    header = f"Source URL: {source_url}"
+    if page_title:
+        header += f"\nBrowser page title: {page_title}"
+    if page_description:
+        header += f"\nMeta description: {page_description}"
+    return f"{header}\n\nPage text:\n\n{scraped_text}"
 
 
 def _parse_json(raw: str) -> dict:
@@ -179,6 +207,8 @@ def extract(
     scraped_text: str,
     source_url: str,
     model: str | None = None,
+    page_title: str | None = None,
+    page_description: str | None = None,
 ) -> OpportunityRecord | ExtractionFailure:
     """Build one opportunity record from page text, or fail with a named reason.
 
@@ -193,7 +223,7 @@ def extract(
         page_chars=len(scraped_text or ""),
     ) as span:
         try:
-            result = _extract(scraped_text, source_url, model)
+            result = _extract(scraped_text, source_url, model, page_title, page_description)
         except Exception as exc:  # noqa: BLE001 — the contract is "never raises"
             result = ExtractionFailure(
                 FailureReason.MALFORMED_RESPONSE,
@@ -223,6 +253,8 @@ def _extract(
     scraped_text: str,
     source_url: str,
     model: str | None = None,
+    page_title: str | None = None,
+    page_description: str | None = None,
 ) -> OpportunityRecord | ExtractionFailure:
     if not scraped_text or len(scraped_text.strip()) < MIN_CONTENT_CHARS:
         return ExtractionFailure(
@@ -236,7 +268,7 @@ def _extract(
     handler = trace_handler()
     messages = [
         SystemMessage(SYSTEM_PROMPT),
-        HumanMessage(_user_prompt(scraped_text, source_url)),
+        HumanMessage(_user_prompt(scraped_text, source_url, page_title, page_description)),
     ]
 
     payload: dict | None = None
@@ -265,7 +297,7 @@ def _extract(
             payload = None
 
         if payload is not None:
-            outcome = _build_record(payload, scraped_text, source_url)
+            outcome = _build_record(payload, scraped_text, source_url, page_title)
             # Only a malformed reply is worth a second attempt. A closed page
             # and a page with nothing on it are settled answers, not mistakes.
             if (
@@ -293,7 +325,7 @@ def _extract(
 
 
 def _build_record(
-    payload: dict, scraped_text: str, source_url: str
+    payload: dict, scraped_text: str, source_url: str, page_title: str | None = None
 ) -> OpportunityRecord | ExtractionFailure:
     """Turn a parsed model reply into a record, or say why it cannot be one."""
     # Closed check: the model's semantic judgement, with the regex behind it.
@@ -319,8 +351,16 @@ def _build_record(
     raw_title = _as_text(payload.get("title"))
     raw_base = _as_text(payload.get("base_title")) or raw_title
     if not raw_title:
+        # No fallback here on purpose. The model was given the page text, the
+        # URL, the browser title and the meta description. If it still cannot
+        # name the opportunity, that is a judgement, and substituting a raw
+        # <title> would put "Home" or "Untitled Document" into base_title —
+        # which is part of the identity key, so a wrong name breaks dedup
+        # silently rather than merely reading badly.
         return ExtractionFailure(
-            FailureReason.INSUFFICIENT_CONTENT, "no title found on the page", source_url
+            FailureReason.INSUFFICIENT_CONTENT,
+            "the page does not name an identifiable opportunity",
+            source_url,
         )
 
     try:
