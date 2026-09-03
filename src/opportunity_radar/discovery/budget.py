@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 DEFAULT_TOOL_CALLS = 25
 DEFAULT_MAX_SEARCHES = 10
 DEFAULT_MAX_SCRAPES = 12
+DEFAULT_MAX_LLM_CALLS = 8
 DEFAULT_WALL_CLOCK_SECONDS = 600
 
 
@@ -34,11 +35,13 @@ class RunBudget:
     tool_calls: int = DEFAULT_TOOL_CALLS
     max_searches: int = DEFAULT_MAX_SEARCHES
     max_scrapes: int = DEFAULT_MAX_SCRAPES
+    max_llm_calls: int = DEFAULT_MAX_LLM_CALLS
     wall_clock_seconds: int = DEFAULT_WALL_CLOCK_SECONDS
 
     spent: int = 0
     searches: int = 0
     scrapes: int = 0
+    llm_calls: int = 0
     started_at: float = field(default_factory=time.monotonic)
     stop_reason: str | None = None
     log: list[str] = field(default_factory=list)
@@ -98,6 +101,12 @@ class RunBudget:
                 "Use pages you have already fetched."
             )
 
+        if tool_name in self.LLM_TOOLS and self.llm_calls >= self.max_llm_calls:
+            return (
+                f"STOP: model-call cap reached — {self.max_llm_calls} calls. "
+                "Finalize the evidence already collected."
+            )
+
         return None
 
     # Tools that cost nothing external — a Mongo read and a Mongo write. The
@@ -107,8 +116,12 @@ class RunBudget:
     # the best one because the budget ran out on the save, one call after the
     # expensive work was already paid for.
     FREE_TOOLS = frozenset({"read_memory", "save_opportunity"})
+    LLM_TOOLS = frozenset({"plan", "analyze", "extract"})
 
     def consume(self, tool_name: str) -> None:
+        refusal = self.refusal(tool_name)
+        if refusal:
+            raise BudgetExhausted(refusal)
         if tool_name in self.FREE_TOOLS:
             self.log.append(f"  --. {tool_name}  (free, t+{self.elapsed:.0f}s)")
             return
@@ -118,6 +131,8 @@ class RunBudget:
             self.searches += 1
         elif tool_name == "scrape":
             self.scrapes += 1
+        if tool_name in self.LLM_TOOLS:
+            self.llm_calls += 1
         self.log.append(f"{self.spent:>3}. {tool_name}  (t+{self.elapsed:.0f}s)")
 
     # -- reporting ----------------------------------------------------------

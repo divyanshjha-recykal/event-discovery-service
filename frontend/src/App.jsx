@@ -28,7 +28,7 @@ function Metrics({ m }) {
       <Stat n={m.programs} l="programs tracked" />
       <Stat
         n={`${m.extraction_success}/${m.extraction_success + m.extraction_failed}`}
-        l="extractions succeeded"
+        l="latest-run extractions succeeded"
       />
       <div className="card stat">
         <div className="n">
@@ -90,9 +90,42 @@ function Step({ e }) {
             {e.outcome === 'ok'
               ? <span className="pill muted">{e.chars} chars</span>
               : <span className="pill not_met">scrape failed</span>}
+            {e.depth !== undefined && <span className="pill muted">L{e.depth}</span>}
+            {e.status_code && <span className="pill muted">HTTP {e.status_code}</span>}
             {e.bare_domain && <span className="pill unclear">homepage</span>}
             {e.detail && <div className="small err">{e.detail}</div>}
           </div>
+        )}
+
+        {e.tool === 'plan' && (
+          <details open>
+            <summary>{(e.queries || []).length} planned searches</summary>
+            {(e.queries || []).map((q) => (
+              <div key={q.query} className="result">
+                <div className="mono">{q.query}</div>
+                <div className="small muted">{q.intent} · {q.geography} · {q.target_year} · {q.rationale}</div>
+              </div>
+            ))}
+          </details>
+        )}
+
+        {e.tool === 'analyze' && (
+          <details open>
+            <summary>{(e.candidates || []).length} candidate entities analyzed</summary>
+            {(e.candidates || []).map((c) => (
+              <div key={`${c.url}-${c.title}-${c.decision}`} className="result">
+                <div><span className={`pill ${c.decision === 'pursue' ? 'met' : 'muted'}`}>{c.decision}</span> <strong>{c.title}</strong></div>
+                <div className="small muted">{c.reason}</div>
+              </div>
+            ))}
+            {(e.errors || []).map((error) => (
+              <div key={error.seed_url} className="result">
+                <div><span className="pill not_met">analysis failed</span></div>
+                <div className="mono small">{error.seed_url}</div>
+                <div className="small err">{error.detail}</div>
+              </div>
+            ))}
+          </details>
         )}
 
         {e.tool === 'extract' && (
@@ -138,6 +171,16 @@ function Step({ e }) {
           </div>
         )}
 
+        {(e.tool === 'skip' || e.tool === 'actionability') && (
+          <div>
+            <a href={e.url} target="_blank" rel="noreferrer" className="mono small">{e.url}</a>
+            <div className="row" style={{ marginTop: 4 }}>
+              <span className={`pill ${e.outcome === 'historical' ? 'unclear' : 'not_met'}`}>{e.outcome}</span>
+              <span className="small">{e.reason}</span>
+            </div>
+          </div>
+        )}
+
         {e.tool === 'read_memory' && <span className="muted small">loaded profile + registry</span>}
       </div>
     </div>
@@ -158,7 +201,8 @@ function RunPanel({ run }) {
         <span className="muted small">
           {b.spent ?? 0}/{b.tool_calls} calls · {c.searched ?? 0} searches ·
           {' '}{c.scraped ?? 0} scraped · {c.extracted ?? 0} extracted ·
-          {' '}{c.saved ?? 0} saved · {c.failed ?? 0} failed
+          {' '}{c.saved ?? 0} saved · {c.rejected ?? 0} rejected ·
+          {' '}{c.historical ?? 0} historical · {c.failed ?? 0} failed
         </span>
         <div className="spacer" />
         {run.trace_url && (
@@ -193,6 +237,7 @@ function RunPanel({ run }) {
 
 function Opportunity({ o }) {
   const e = o.eligibility
+  const completeness = o.extraction_completeness
   const deadlineOk = o.submission_deadline
     && new Date(o.submission_deadline) >= new Date(new Date().toDateString())
 
@@ -201,6 +246,7 @@ function Opportunity({ o }) {
       <summary>
         <strong>{o.title}</strong>{' '}
         {o.dry_run && <span className="pill unclear">fixture</span>}{' '}
+        {o.actionability && <span className="pill met">{o.actionability}</span>}{' '}
         {e
           ? <span className={`pill ${e.confidence}`}>confidence: {e.confidence}</span>
           : <span className="pill muted">not evaluated</span>}{' '}
@@ -216,6 +262,14 @@ function Opportunity({ o }) {
         <span className="pill muted">cycle {o.cycle_year}</span>
         <a href={o.source_url} target="_blank" rel="noreferrer" className="mono">{o.source_url}</a>
       </div>
+
+      {completeness && (
+        <div className="small muted" style={{ marginBottom: 10 }}>
+          extraction completeness <strong>{Math.round(completeness.score * 100)}%</strong>
+          {!!(completeness.gaps || []).length && ` · gaps: ${completeness.gaps.join(', ')}`}
+          {!!(o.evidence_urls || []).length && ` · ${o.evidence_urls.length} source page(s)`}
+        </div>
+      )}
 
       {!e && !!(o.eligibility_criteria || []).length && (
         <table className="crit-table">
@@ -290,10 +344,10 @@ function NotConsidered({ skipped, failures }) {
         {(skipped || []).map((s) => (
           <tr key={s.url}>
             <td><a href={s.url} target="_blank" rel="noreferrer" className="mono small">{s.url}</a></td>
-            <td><span className="pill muted">not pursued</span></td>
+            <td><span className={`pill ${s.outcome === 'historical' ? 'unclear' : 'muted'}`}>{s.outcome || 'not pursued'}</span></td>
             <td className="why">
-              Fetched ({s.chars} chars) but the agent judged it not worth extracting
-              {s.bare_domain && ' · homepage, not a call for entries'}
+              {s.reason || `Fetched (${s.chars} chars) but research did not take it forward`}
+              {s.bare_domain && ' · homepage'}
             </td>
           </tr>
         ))}
@@ -423,7 +477,7 @@ export default function App() {
               </span>
               <span className="mono">{r.model}</span>
               <span className="muted">
-                {r.counts?.saved ?? 0} saved · {r.counts?.failed ?? 0} failed
+                {r.counts?.saved ?? 0} saved · {r.counts?.rejected ?? 0} rejected · {r.counts?.failed ?? 0} failed
               </span>
             </div>
           ))}

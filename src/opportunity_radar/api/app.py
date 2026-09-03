@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -96,6 +95,7 @@ async def state() -> dict:
         _jsonable(d)
         async for d in _db[RUNS].find({}, {"journey": 0}).sort("started_at", -1).limit(20)
     ]
+    latest_counts = runs[0].get("counts", {}) if runs else {}
 
     verdicts = {"high": 0, "low": 0, "unevaluated": 0}
     statuses = {"met": 0, "not_met": 0, "unclear": 0}
@@ -112,10 +112,8 @@ async def state() -> dict:
         "metrics": {
             "opportunities": len(opportunities),
             "programs": len(programs),
-            # Extraction succeeded once per stored opportunity; failures are the
-            # other half of that ratio, which is why they are persisted at all.
-            "extraction_success": len(opportunities),
-            "extraction_failed": len(failures),
+            "extraction_success": latest_counts.get("extracted", 0),
+            "extraction_failed": latest_counts.get("extraction_failed", 0),
             "verdicts": verdicts,
             "criteria": statuses,
         },
@@ -137,6 +135,7 @@ async def _skipped_pages() -> list[dict]:
     """
     scraped: dict[str, dict] = {}
     reached_extraction: set[str] = set()
+    decided: dict[str, dict] = {}
 
     async for run in _db[RUNS].find({}, {"journey": 1, "run_id": 1, "started_at": 1}):
         for event in run.get("journey", []):
@@ -153,13 +152,28 @@ async def _skipped_pages() -> list[dict]:
                 }
             elif event["tool"] == "extract":
                 reached_extraction.add(url)
+            elif event["tool"] in ("skip", "actionability"):
+                decided[url] = {
+                    "url": url,
+                    "run_id": run.get("run_id"),
+                    "when": run.get("started_at"),
+                    "reason": event.get("reason") or "not taken forward",
+                    "outcome": event.get("outcome") or "skipped",
+                    "title": event.get("title"),
+                }
 
-    return [_jsonable(v) for k, v in scraped.items() if k not in reached_extraction]
+    implicit = {
+        key: value
+        for key, value in scraped.items()
+        if key not in reached_extraction and key not in decided
+    }
+    return [_jsonable(v) for v in [*decided.values(), *implicit.values()]]
 
 
 class PipelineRequest(BaseModel):
     model: str | None = None
     budget: int = Field(default=18, ge=1, le=60)
+    queries: list[str] = Field(default_factory=list)
     dry_run: bool = False
 
 
@@ -177,8 +191,9 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
 
     async def _go() -> None:
         try:
-            await run_discovery(
-                _db, model=request.model, budget=budget,
+            discovery = await run_discovery(
+                _db, queries=request.queries or None,
+                model=request.model, budget=budget,
                 dry_run=request.dry_run, run_id=run_id,
             )
         except Exception as exc:  # noqa: BLE001
@@ -188,10 +203,21 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
             )
             return
 
-        # Eligibility second, on what discovery just stored.
-        async for doc in _db[OPPORTUNITIES].find({}):
+        # Eligibility is a separate stage and runs only on actionable records
+        # accepted by this Discovery run, never on stale records from old runs.
+        eligibility_failures: list[dict] = []
+        evaluated = 0
+        query = {"source_url": {"$in": discovery.saved}}
+        async for doc in _db[OPPORTUNITIES].find(query):
             criteria = doc.get("eligibility_criteria") or []
-            if not criteria or doc.get("eligibility"):
+            completeness = doc.get("extraction_completeness") or {}
+            if not criteria or not completeness.get("eligibility", bool(criteria)):
+                eligibility_failures.append(
+                    {
+                        "source_url": doc.get("source_url"),
+                        "reason": "no sufficiently supported entry-eligibility criteria",
+                    }
+                )
                 continue
             try:
                 result = await asyncio.to_thread(
@@ -199,11 +225,25 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
                     f"{doc.get('title')} — {doc.get('organizing_body')}", request.model,
                 )
                 await attach_eligibility(_db, doc["source_url"], result.model_dump())
-            except Exception:  # noqa: BLE001 — one bad record must not stop the rest
+                evaluated += 1
+            except Exception as exc:  # noqa: BLE001
+                eligibility_failures.append(
+                    {
+                        "source_url": doc.get("source_url"),
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    }
+                )
                 continue
 
         await _db[RUNS].update_one(
-            {"run_id": run_id}, {"$set": {"eligibility_done": True}}
+            {"run_id": run_id},
+            {
+                "$set": {
+                    "eligibility_done": True,
+                    "eligibility_evaluated": evaluated,
+                    "eligibility_failures": eligibility_failures,
+                }
+            },
         )
 
     background.add_task(_go)

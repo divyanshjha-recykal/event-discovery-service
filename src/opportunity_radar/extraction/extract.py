@@ -42,6 +42,40 @@ MIN_CONTENT_CHARS = 200
 # against the requested ceiling, so an unbounded call 402s on a small balance.
 MAX_OUTPUT_TOKENS = 4096
 
+EXTRACTION_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["open", "closed", "unclear"]},
+        "title": {"type": ["string", "null"]},
+        "organizing_body": {"type": ["string", "null"]},
+        "base_title": {"type": ["string", "null"]},
+        "cycle_year": {"type": ["integer", "null"]},
+        "category": {
+            "type": ["string", "null"],
+            "enum": ["award", "grant", "event", "conference", None],
+        },
+        "eligibility_criteria": {"type": "array", "items": {"type": "string"}},
+        "submission_deadline": {"type": ["string", "null"]},
+        "deadline_note": {"type": ["string", "null"]},
+        "event_date": {"type": ["string", "null"]},
+        "confidence_note": {"type": "string"},
+    },
+    "required": [
+        "status",
+        "title",
+        "organizing_body",
+        "base_title",
+        "cycle_year",
+        "category",
+        "eligibility_criteria",
+        "submission_deadline",
+        "deadline_note",
+        "event_date",
+        "confidence_note",
+    ],
+    "additionalProperties": False,
+}
+
 # Backstop only. Phrases that state closure outright, not ones that merely
 # discuss a past cycle.
 _CLOSED_PHRASES = re.compile(
@@ -59,8 +93,10 @@ _CLOSED_PHRASES = re.compile(
 )
 
 SYSTEM_PROMPT = """\
-You extract structured records about awards, grants, events and conferences \
-from the text of a single web page.
+You extract one targeted structured record about an award, grant, event or \
+conference from an evidence bundle. A bundle can contain several official pages \
+and can mention related events, award tracks and past editions. Use only facts \
+that belong to the named target opportunity and current cycle.
 
 Return ONLY a JSON object with exactly these keys:
 
@@ -125,6 +161,7 @@ def _user_prompt(
     source_url: str,
     page_title: str | None = None,
     page_description: str | None = None,
+    target_title: str | None = None,
 ) -> str:
     """Everything the page says about itself, not just its markdown body.
 
@@ -142,6 +179,12 @@ def _user_prompt(
         header += f"\nBrowser page title: {page_title}"
     if page_description:
         header += f"\nMeta description: {page_description}"
+    if target_title:
+        header += (
+            f"\nTarget opportunity selected by research: {target_title}\n"
+            "Extract that entity only. Other events, award tracks, past editions, "
+            "sponsors, and related programmes in the evidence are context, not the target."
+        )
     return f"{header}\n\nPage text:\n\n{scraped_text}"
 
 
@@ -209,6 +252,7 @@ def extract(
     model: str | None = None,
     page_title: str | None = None,
     page_description: str | None = None,
+    target_title: str | None = None,
 ) -> OpportunityRecord | ExtractionFailure:
     """Build one opportunity record from page text, or fail with a named reason.
 
@@ -223,7 +267,14 @@ def extract(
         page_chars=len(scraped_text or ""),
     ) as span:
         try:
-            result = _extract(scraped_text, source_url, model, page_title, page_description)
+            result = _extract(
+                scraped_text,
+                source_url,
+                model,
+                page_title,
+                page_description,
+                target_title,
+            )
         except Exception as exc:  # noqa: BLE001 — the contract is "never raises"
             result = ExtractionFailure(
                 FailureReason.MALFORMED_RESPONSE,
@@ -255,6 +306,7 @@ def _extract(
     model: str | None = None,
     page_title: str | None = None,
     page_description: str | None = None,
+    target_title: str | None = None,
 ) -> OpportunityRecord | ExtractionFailure:
     if not scraped_text or len(scraped_text.strip()) < MIN_CONTENT_CHARS:
         return ExtractionFailure(
@@ -268,7 +320,15 @@ def _extract(
     handler = trace_handler()
     messages = [
         SystemMessage(SYSTEM_PROMPT),
-        HumanMessage(_user_prompt(scraped_text, source_url, page_title, page_description)),
+        HumanMessage(
+            _user_prompt(
+                scraped_text,
+                source_url,
+                page_title,
+                page_description,
+                target_title,
+            )
+        ),
     ]
 
     payload: dict | None = None
@@ -286,7 +346,14 @@ def _extract(
             response = llm.invoke(
                 messages,
                 config={"callbacks": [handler]},
-                response_format={"type": "json_object"},
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "opportunity_extraction",
+                        "strict": True,
+                        "schema": EXTRACTION_JSON_SCHEMA,
+                    },
+                },
             )
             payload = _parse_json(response.content)
         except json.JSONDecodeError as exc:
@@ -297,7 +364,12 @@ def _extract(
             payload = None
 
         if payload is not None:
-            outcome = _build_record(payload, scraped_text, source_url, page_title)
+            outcome = _build_record(
+                payload,
+                scraped_text,
+                source_url,
+                target_title or page_title,
+            )
             # Only a malformed reply is worth a second attempt. A closed page
             # and a page with nothing on it are settled answers, not mistakes.
             if (
@@ -351,15 +423,15 @@ def _build_record(
     raw_title = _as_text(payload.get("title"))
     raw_base = _as_text(payload.get("base_title")) or raw_title
     if not raw_title:
-        # No fallback here on purpose. The model was given the page text, the
-        # URL, the browser title and the meta description. If it still cannot
-        # name the opportunity, that is a judgement, and substituting a raw
-        # <title> would put "Home" or "Untitled Document" into base_title —
-        # which is part of the identity key, so a wrong name breaks dedup
-        # silently rather than merely reading badly.
+        # Never substitute a raw browser title into the identity key. This is a
+        # malformed model response, however, not proof that a substantial
+        # evidence bundle lacks content; classify it so the targeted retry runs.
         return ExtractionFailure(
-            FailureReason.INSUFFICIENT_CONTENT,
-            "the page does not name an identifiable opportunity",
+            FailureReason.MALFORMED_RESPONSE,
+            (
+                "model returned no title"
+                + (f" despite the research title {page_title!r}" if page_title else "")
+            ),
             source_url,
         )
 

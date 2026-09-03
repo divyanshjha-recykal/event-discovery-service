@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Discovers awards, grants, and events relevant to Recykal and evaluates eligibility against the business profile."
 requires-python = ">=3.11"
 dependencies = [
-    # Reasoning loop (Discovery Agent, Stage 3) and the callback plumbing tracing rides on.
+    # Bounded Discovery graph (Stage 3) and the callback plumbing tracing rides on.
     "langgraph>=0.6",
     "langchain-core>=0.3",
     # langfuse.langchain.CallbackHandler imports the `langchain` meta-package.
@@ -16,7 +16,7 @@ dependencies = [
     # Storage (Stage 1). PyMongo's native async API (AsyncMongoClient), not Motor —
     # Motor is past end-of-life.
     "pymongo>=4.13",
-    # Discovery tools (Stage 3) — installed now so Stage 1 config can name their keys.
+    # Discovery providers (Stage 3).
     "tavily-python>=0.5",
     "firecrawl-py>=2.0",
     # Config.

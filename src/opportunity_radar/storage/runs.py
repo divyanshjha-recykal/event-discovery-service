@@ -46,8 +46,16 @@ async def start_run(
                 "thinking": [],
                 "summary": "",
                 "trace_url": None,
-                "counts": {"searched": 0, "scraped": 0, "extracted": 0,
-                           "saved": 0, "failed": 0},
+                "counts": {
+                    "searched": 0,
+                    "scraped": 0,
+                    "extracted": 0,
+                    "extraction_failed": 0,
+                    "saved": 0,
+                    "rejected": 0,
+                    "historical": 0,
+                    "failed": 0,
+                },
             }
         },
         upsert=True,

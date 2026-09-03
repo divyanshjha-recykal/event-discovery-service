@@ -80,7 +80,13 @@ def run_model(model: str | None, examples: list) -> dict:
     for example in examples:
         print(f"\n--- {example.name}")
         try:
-            result = extract(example.page_text, example.source_url, model=model)
+            result = extract(
+                example.page_text,
+                example.source_url,
+                model=model,
+                page_title=example.page_title,
+                target_title=example.target_title,
+            )
         except Exception as exc:  # noqa: BLE001
             print(f"  CRASHED: {type(exc).__name__}: {exc}")
             continue

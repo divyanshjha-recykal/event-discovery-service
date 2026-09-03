@@ -3,15 +3,26 @@
 from .agent import DiscoveryRun, run_discovery
 from .budget import BudgetExhausted, RunBudget, estimate_cost
 from .profile_seed import ProfileSectionMissing, discovery_seed, seed_stats
-from .tools import DiscoveryContext, build_tools
+from .state import (
+    CandidateVerdict,
+    DiscoveryState,
+    EvidenceBundle,
+    EvidencePage,
+    PlannedQuery,
+    SearchHit,
+)
 
 __all__ = [
     "BudgetExhausted",
-    "DiscoveryContext",
+    "CandidateVerdict",
     "DiscoveryRun",
+    "DiscoveryState",
+    "EvidenceBundle",
+    "EvidencePage",
+    "PlannedQuery",
     "ProfileSectionMissing",
     "RunBudget",
-    "build_tools",
+    "SearchHit",
     "discovery_seed",
     "estimate_cost",
     "run_discovery",

@@ -19,6 +19,8 @@ EXAMPLES_FILE = GOLDEN_SET_DIR / "extraction-examples.md"
 
 _EXAMPLE = re.compile(r"^### Example (\d+)\s*[—-]\s*(.+)$", re.MULTILINE)
 _SOURCE = re.compile(r"^\*\*Source:\*\*\s*(\S+)", re.MULTILINE)
+_BROWSER_TITLE = re.compile(r"^\*\*Browser title:\*\*\s*(.+)$", re.MULTILINE)
+_TARGET = re.compile(r"^\*\*Target:\*\*\s*(.+)$", re.MULTILINE)
 _PAGE = re.compile(r"^\*\*Saved page content[^*]*\*\*\s*\n(.*?)(?=\n\*\*)", re.MULTILINE | re.DOTALL)
 _EXPECTED = re.compile(r"^\*\*Correct extraction:\*\*\s*\n```\n(.*?)\n```", re.MULTILINE | re.DOTALL)
 _CLOSED = re.compile(r"typed_failure:\s*`?opportunity_closed`?|`opportunity_closed`")
@@ -34,6 +36,8 @@ class GoldenExample:
     label: str
     source_url: str
     page_text: str
+    page_title: str | None
+    target_title: str | None
     expected: dict | None          # None when the example has no record to produce
     expects_closed: bool           # True when the right answer is opportunity_closed
 
@@ -90,7 +94,9 @@ def _parse_expected(block: str) -> dict:
         value = re.sub(r"\s*\([^)]*\)\s*$", "", value).strip()  # drop parenthetical aside
         value = value.strip('"')
 
-        if value == "null":
+        if value == "[]":
+            out[name] = []
+        elif value == "null":
             out[name] = None
         elif value in ("true", "false"):
             out[name] = value == "true"
@@ -134,6 +140,8 @@ def load_examples(path: Path | None = None) -> list[GoldenExample]:
 
         expected_match = _EXPECTED.search(body)
         expected = _parse_expected(expected_match.group(1)) if expected_match else None
+        browser_title = _BROWSER_TITLE.search(body)
+        target = _TARGET.search(body)
 
         examples.append(
             GoldenExample(
@@ -141,6 +149,8 @@ def load_examples(path: Path | None = None) -> list[GoldenExample]:
                 label=heading.group(2).strip(),
                 source_url=source.group(1).strip(),
                 page_text=_strip_blockquote(page.group(1)),
+                page_title=browser_title.group(1).strip() if browser_title else None,
+                target_title=target.group(1).strip() if target else None,
                 expected=expected,
                 expects_closed=expected is None and bool(_CLOSED.search(body)),
             )

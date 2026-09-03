@@ -129,6 +129,7 @@ async def main() -> int:
     print(f"\nOpportunities already stored: {before}")
 
     runs = []
+    actionability_checks: list[bool] = []
     try:
         for model in models:
             budget = RunBudget(
@@ -142,6 +143,13 @@ async def main() -> int:
                 db, queries=args.queries, model=model, budget=budget, dry_run=args.dry_run
             )
             runs.append(run)
+            saved_docs = [
+                await db[OPPORTUNITIES].find_one({"source_url": url})
+                for url in run.saved
+            ]
+            actionability_checks.append(
+                all(doc and doc.get("actionability") == "actionable" for doc in saved_docs)
+            )
 
             print("\n-- tool calls --")
             for line in run.budget.log:
@@ -157,6 +165,8 @@ async def main() -> int:
             if run.auto_saved:
                 print(f"   ({len(run.auto_saved)} marked * were auto-saved — the model "
                       "extracted them but never called save_opportunity)")
+            print(f"   rejected         : {len(run.rejected)}")
+            print(f"   historical only  : {len(run.historical)}")
             for failure in run.failures:
                 print(f"     ! {failure}")
             if run.warnings:
@@ -195,16 +205,18 @@ async def main() -> int:
         for run in runs
     )
     traced = all(run.trace_url for run in runs)
+    actionable_only = all(actionability_checks)
     print(f"  produced at least one stored opportunity : {'PASS' if any_saved else 'FAIL'}")
     print(f"  stayed within budget                     : {'PASS' if all_in_budget else 'FAIL'}")
     print(f"  run visible as a Langfuse trace          : {'PASS' if traced else 'FAIL'}")
+    print(f"  saved only actionability-gated records   : {'PASS' if actionable_only else 'FAIL'}")
     print("  deduplicates on a second run             : re-run with the SAME "
           "--query flags and check 'new' is 0.")
     print("      (without --query the agent invents different queries each run, "
           "so it finds different opportunities and 'new' will not be 0 — that is "
           "not a dedup failure. Storage-level dedup is proven by verify_storage.py.)")
 
-    return 0 if (any_saved and all_in_budget and traced) else 1
+    return 0 if (any_saved and all_in_budget and traced and actionable_only) else 1
 
 
 if __name__ == "__main__":

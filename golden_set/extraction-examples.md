@@ -110,7 +110,7 @@ title: "Navarra Circular Economy Awards 2026"
 organizing_body: "Regional Development Agency of Navarre"
 base_title: "Navarra Circular Economy Awards"
 cycle_year: 2026
-category: "grant"   # a financial award to fund project development, closer to a grant than a recognition-only award
+category: "award"   # the source presents this as an award competition, even though the prize funds project development
 eligibility_criteria: [
   "Open to students from universities and vocational training centres across Europe",
   "Projects must be final-cycle projects, Bachelor's/Degree/Master's final projects, or doctoral theses",
@@ -126,6 +126,93 @@ source_url: "https://circulareconomy.europa.eu/node/9802"
 Deadline of June 19, 2026 has already passed as of today. Correct pipeline behaviour: not surfaced as a current opportunity, the extracted fields are all accurate, but a past deadline makes it inactionable regardless, a separate concern from whether extraction did its job correctly.
 
 **What this example is for:** three things at once, the first genuinely international source in the set, the case that exercises the corrected `deadline_verified` rule (year inferred from context, not stated next to the day/month), and a page where every field extracts correctly but the opportunity still isn't actionable, for a reason extraction alone can't catch.
+
+---
+
+### Example 4 — title available only through page metadata
+
+**Source:** https://sustainability-awards.me
+
+**Browser title:** Sustainability Innovation Awards 2026
+
+**Target:** Sustainability Innovation Awards 2026
+
+**Saved page content (title deliberately omitted to reproduce image/hero-title pages):**
+
+> Nomination Deadline: 18 August 2026
+>
+> Sofitel The Palm Dubai
+>
+> The awards celebrate trailblazers in sustainability, recognizing exceptional corporate initiatives and transformative projects shaping a greener, more resilient future in the Middle East.
+>
+> The programme is brought to you by BNC Publishing.
+>
+> Submit your nominations by completing the company or individual details, answering all required questions, and supplying supporting documents as a single PDF.
+
+**Correct extraction:**
+```
+title: "Sustainability Innovation Awards 2026"
+organizing_body: "BNC Publishing"
+base_title: "Sustainability Innovation Awards"
+cycle_year: 2026
+category: "award"
+eligibility_criteria: []
+submission_deadline: "2026-08-18"
+deadline_note: null
+deadline_verified: true
+event_date: null
+source_url: "https://sustainability-awards.me"
+```
+
+**What this example is for:** verifies that browser metadata is valid evidence when the rendered hero contains the name but Firecrawl's main-content markdown omits it.
+
+---
+
+### Example 5 — multi-page bundle with event and embedded award
+
+**Source:** https://ic-ce.com/icef2026-ace-awards-enterprise
+
+**Browser title:** ACE Awards | ICEF2026 | Enterprise Awards
+
+**Target:** ACE Awards 2026
+
+**Saved page content (two official pages combined as one evidence bundle):**
+
+> === SOURCE PAGE: https://ic-ce.com/icef-2026 ===
+>
+> India Circular Economy Forum 2026 is an annual forum bringing together industry, startups, academia and policymakers.
+>
+> ## Awards
+>
+> The International Council for Circular Economy presents the 5th Edition of ACE, recognizing excellence in circular economy initiatives across India. ACE is open to organizations of any kind, including companies large, small, medium and micro, charities, social enterprises, NGOs and government departments.
+>
+> === SOURCE PAGE: https://ic-ce.com/icef2026-ace-awards-enterprise ===
+>
+> ## Enterprise Awards
+>
+> These awards are for companies large, small, medium and micro, think tanks, charities, not-for-profits, social enterprises, NGOs, membership and accreditation organizations and government departments.
+>
+> Applicants should demonstrate commitment to circularity, waste reduction, closed-loop systems, ESG or sustainability reporting, and leadership support.
+
+**Correct extraction:**
+```
+title: "ACE Awards 2026"
+organizing_body: "International Council for Circular Economy"
+base_title: "ACE Awards"
+cycle_year: 2026
+category: "award"
+eligibility_criteria: [
+  "Open to companies of any size, think tanks, charities, not-for-profits, social enterprises, NGOs, membership or accreditation organizations, and government departments",
+  "Applicant must demonstrate a circular-economy approach through commitments or practices such as waste reduction, closed-loop systems, sustainability reporting, or leadership support"
+]
+submission_deadline: null
+deadline_note: null
+deadline_verified: false
+event_date: null
+source_url: "https://ic-ce.com/icef2026-ace-awards-enterprise"
+```
+
+**What this example is for:** verifies that research can target an embedded award inside a bundle without turning the parent forum into the award record.
 
 ---
 
