@@ -26,7 +26,7 @@ from ..storage import (
 from ..tracing import chat_model, stage_span, trace_handler
 from .actionability import assess_actionability, assess_completeness
 from .link_resolver import canonicalize_url, rank_search_hit, resolve_evidence_bundle
-from .profile_seed import discovery_seed
+from .profile_seed import ProfileSectionMissing, discovery_seed, profile_facts
 from .providers import tavily_search
 from .state import (
     CandidateVerdict,
@@ -182,37 +182,52 @@ async def _memory(runtime: WorkflowRuntime) -> str:
 
 
 def _fallback_queries(today: date) -> list[PlannedQuery]:
+    """A minimal plan built from the profile, used only when planning fails.
+
+    Every term here comes from BusinessProfile.md. An earlier version hardcoded
+    four queries naming India, the Middle East and the Gulf, plus a rationale
+    referring to a different company entirely — so a single planner exception
+    silently redirected a whole run at regions this business does not operate
+    in. A fallback that searches for the wrong company is worse than no
+    fallback, so this raises when the profile yields nothing to search on.
+    """
+    facts = profile_facts()
+    geographies = facts["geographies"]
+    sectors = facts["sectors"]
+    if not geographies or not sectors:
+        raise ProfileSectionMissing(
+            "cannot build a fallback query plan: BusinessProfile.md yielded "
+            f"{len(geographies)} market(s) and {len(sectors)} sector(s). "
+            "Planning must not fall back to invented geography or sector."
+        )
+
     next_year = today.year + 1
-    return [
+    primary = geographies[0]
+    # The two broadest sector terms; the material-level ones (PET, HDPE) are
+    # too narrow to anchor a search for awards.
+    lead_sectors = [s for s in sectors if len(s.split()) > 1][:2] or sectors[:2]
+
+    plans = [
         PlannedQuery(
-            f"circular economy awards {today.year} {next_year} call for entries India",
-            "award",
-            "India",
-            today.year,
-            "Core circular-economy recognition",
+            f"{lead_sectors[0]} awards {next_year} call for entries {primary}",
+            "award", primary, next_year,
+            f"Core recognition in {lead_sectors[0]}, the profile's stated sector",
         ),
         PlannedQuery(
-            f"waste management sustainability awards {next_year} nominations India",
-            "award",
-            "India",
-            next_year,
-            "Next-cycle waste and sustainability awards",
-        ),
-        PlannedQuery(
-            f"EPR recycling innovation grants {today.year} {next_year} applications open",
-            "grant",
-            "India and Middle East",
-            today.year,
-            "Funding relevant to EPR and recycling technology",
-        ),
-        PlannedQuery(
-            f"circular economy awards {next_year} call for entries Middle East Gulf",
-            "award",
-            "Middle East",
-            next_year,
-            "Recognition aligned with Recykal's regional expansion",
+            f"{lead_sectors[-1]} grants {next_year} applications open {primary}",
+            "grant", primary, next_year,
+            f"Funding relevant to {lead_sectors[-1]}",
         ),
     ]
+    for geography in geographies[1:3]:
+        plans.append(
+            PlannedQuery(
+                f"{lead_sectors[0]} awards {next_year} nominations open {geography}",
+                "award", geography, next_year,
+                f"{geography} is a market the profile states this business serves",
+            )
+        )
+    return plans
 
 
 async def plan_queries_node(
@@ -236,11 +251,44 @@ async def plan_queries_node(
     elif runtime.dry_run:
         planned = _fallback_queries(today)[:3]
     else:
+        facts = profile_facts()
+        geographies = ", ".join(facts["geographies"]) or "(profile states none)"
+        sectors = ", ".join(facts["sectors"]) or "(profile states none)"
+
         prompt = f"""Today is {today.isoformat()}.
 Plan 3-5 non-overlapping web searches for currently actionable awards, grants,
-events or conferences relevant to the business memory below. Prioritize calls
-whose deadline has not passed and next-cycle programmes. Do not search past
-years. Cover India and the Middle East and vary sector/opportunity type.
+events or conferences this business could enter.
+
+GEOGRAPHY — search only these markets, taken from the business profile:
+{geographies}
+Do not search any other region. If a region is not listed above, this business
+does not operate there and an award there is not actionable for it.
+
+SECTORS — taken from the business profile:
+{sectors}
+
+WRITE QUERIES THAT FIND ENTRY PAGES, NOT ARTICLES ABOUT THE SUBJECT.
+The single most common failure is a query that reads like a research topic and
+returns directories, listicles, blog posts and news. You want the page where a
+programme invites entries.
+
+- Include the words an entry page uses and an article does not:
+  "call for entries", "nominations open", "applications open", "how to apply",
+  "entry deadline", "submit nomination".
+- Name a sector and a year: "<sector> award {today.year + 1} call for entries <market>".
+- Do not write topic queries. "<sector> <sector> grants <market>" reads like a
+  research question and returns aggregator sites; "<sector> award
+  {today.year + 1} nominations open <market>" reads like an entry page and
+  returns the award. Substitute a real sector and a real market from the lists
+  above — never a region that is not listed there.
+- Avoid words that pull directories and roundups: "list of", "top", "best",
+  "guide", "opportunities", "funding opportunities", "grants for".
+- One query may target a specific programme by name if the memory below shows
+  this business has entered or won something similar before.
+
+TIMING — today is {today.isoformat()}. A cycle for the current year has usually
+closed by now, so prefer {today.year + 1} cycles and programmes currently open.
+Never search a past year.
 
 This is replanning attempt {state['replan_count']}. Earlier searches or evidence:
 {[hit.query for hit in state.get('search_hits', [])][-8:]}

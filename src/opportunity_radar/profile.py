@@ -1,4 +1,4 @@
-"""Loads the Recykal business profile.
+"""Loads the business profile.
 
 The Discovery and Eligibility Agents reason against this document, so it is read
 from disk at run time and passed into prompts whole. It is never copied into a
@@ -19,10 +19,9 @@ from .paths import BUSINESS_PROFILE, REPO_ROOT
 
 # BusinessProfile.md is the name in the repo; the other is the name the document
 # has been circulated under. Both resolve, so neither breaks the loader.
-_CANDIDATE_NAMES = (
-    "BusinessProfile.md",
-    "recykal-business-profile-final.md",
-)
+#: BusinessProfile.md is the profile. One name, so there is no ambiguity about
+#: which file defines the business.
+_CANDIDATE_NAMES = ("BusinessProfile.md",)
 
 
 class ProfileNotFound(FileNotFoundError):

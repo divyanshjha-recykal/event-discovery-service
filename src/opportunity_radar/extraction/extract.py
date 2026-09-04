@@ -131,7 +131,8 @@ institutions" is ONE condition — splitting it into "Individuals" and \
 one but not the other then looks half-ineligible.
 
     Do not return a paragraph either. If a sentence genuinely states several \
-separate requirements ("must be registered in India, and must have three \
+separate requirements ("must be registered in the host country, and must have \
+three \
 years of operating history"), split it there.
 
     Only include conditions for ENTERING. A list of who attends, who speaks, \

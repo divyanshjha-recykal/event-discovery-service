@@ -40,7 +40,7 @@ Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+
 - Customers: B2B (brands, retailers, MRFs/ULBs) and B2G (municipal and state DRS programmes)
 - Platform integration: real-time traceability via CircularNet, from collection through recycling
 
-## Operational scale in India
+## Operational scale in India(PRIMARY BUSINESS Region)
 
 - **Char Dham circuit** (Kedarnath, Gangotri, Yamunotri, Badrinath): 30 lakh+ bottles collected and recycled across 105 collection points, impacting 16.5 lakh+ people along the 33 km Guptkashi–Kedarnath corridor
 - **Kedarnath dDRS pilot**: 1.63 lakh bottles prevented from entering Himalayan water bodies, 7.5 lakh bottles sent for recycling, 90% recycling rate, 9 sq km landfill space saved, 250+ MT coal saved, 38+ MT CO2e saved
@@ -55,7 +55,7 @@ Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+
 - **Uttarakhand**: Deposit Refund System Experience Zones live in Bhimtal, Haldwani, Haridwar, Nainital
 - Named active deployment: Goa DRS; other markets listed under Primary Markets below
 
-## International operations
+## International operations(Secondary)
 
 - **Bhutan**: national-scale deployment. Gelephu Mindfulness City — 26 lakh+ bottles collected. Phuentsholing — 1.25 lakh+ bottles collected. Population participation exceeding **75%**. Refunds integrated with the Bank of Bhutan.
 - **Mauritius**: listed as a primary market served. No deployment-level figures disclosed.
