@@ -46,6 +46,22 @@ _OPEN_SIGNAL = re.compile(
 )
 _MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 
+# Firecrawl cannot read raster images and errors on them, so following one is a
+# paid call that can only fail. PDFs are deliberately absent from this list —
+# award guidelines and entry terms are very often PDFs and Firecrawl does read
+# those.
+_BINARY_SUFFIXES = (
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".tiff", ".svg",
+    ".ico", ".mp4", ".webm", ".mov", ".avi", ".mp3", ".wav", ".zip", ".gz",
+    ".rar", ".7z", ".exe", ".dmg", ".woff", ".woff2", ".ttf", ".eot", ".css",
+    ".js", ".json", ".xml", ".rss",
+)
+
+
+def _is_binary(url: str) -> bool:
+    path = (urlparse(url).path or "").lower()
+    return path.endswith(_BINARY_SUFFIXES)
+
 
 def _host(url: str) -> str:
     return (urlparse(url).hostname or "").removeprefix("www.").lower()
@@ -138,6 +154,11 @@ def _candidate_links(page: EvidencePage, seed_url: str) -> list[tuple[float, str
     ranked: list[tuple[float, str]] = []
     for url, label in labelled.items():
         absolute = canonicalize_url(urljoin(page.url, url))
+        # Never spend a scrape on a binary. One run followed five .jpg links
+        # off an awards page — five paid Firecrawl calls, five errors, and they
+        # crowded out the real pages the bundle needed.
+        if _is_binary(absolute):
+            continue
         score = score_link(absolute, label, seed_url=seed_url)
         if score is not None:
             ranked.append((score, absolute))

@@ -36,10 +36,29 @@ from .state import (
     WorkflowRuntime,
 )
 
-MAX_OUTPUT_TOKENS = 4096
+# Raised from 4096. Under strict json_schema the model must emit a complete
+# conforming object, so a truncated reply is unparseable and the whole analysis
+# is lost — not degraded, lost. Two calls hit exactly 4096 and took the run down
+# with them. The point of the analysis is the full condition list, so the
+# ceiling has to leave room for it.
+MAX_OUTPUT_TOKENS = 8192
+
 MAX_RESEARCH_CANDIDATES = 3
 MIN_CANDIDATE_SCORE = 3.0
-ANALYSIS_BUNDLE_CHARS = 12_000
+
+# Raised from 12,000. This is the cap on how much of an evidence bundle the
+# analyser actually reads, and it decides how many eligibility conditions we can
+# possibly find. At 12k a multi-page bundle was being cut mid-page, so a
+# programme could be judged on the one condition that survived the truncation
+# while the conditions that would have disqualified us sat past the boundary.
+ANALYSIS_BUNDLE_CHARS = 32_000
+
+# Below this, a "page" is a bot-block stub, an error page or a redirect notice —
+# not something to spend a model call on. One 82-character fetch produced 4096
+# tokens of looping output because the model had nothing to describe but was
+# still required to satisfy the schema.
+MIN_BUNDLE_CHARS = 400
+
 MIN_CALLS_AFTER_RESEARCH = 3
 
 
@@ -493,6 +512,26 @@ async def analyze_node(
         analyzed.add(bundle.seed_url)
     else:
         for bundle in bundles:
+            # A near-empty bundle means the fetch failed, not that the page had
+            # nothing to say. Attribute it to the scrape so the failure points
+            # at the stage that actually broke, and do not pay for a model call
+            # on it.
+            evidence_chars = len(bundle.combined_text.strip())
+            if evidence_chars < MIN_BUNDLE_CHARS:
+                detail = (
+                    f"scrape returned only {evidence_chars} chars across "
+                    f"{len(bundle.source_urls)} page(s) — treated as a failed "
+                    "fetch (bot block, error page or redirect), not analysed"
+                )
+                errors.append({"seed_url": bundle.seed_url, "detail": detail})
+                runtime.failures.append(f"scrape {bundle.seed_url}: {detail}")
+                await _record(
+                    runtime, "scrape", node="analyze", url=bundle.seed_url,
+                    outcome="insufficient", chars=evidence_chars, detail=detail,
+                )
+                analyzed.add(bundle.seed_url)
+                continue
+
             refusal = runtime.budget.refusal("analyze")
             if refusal:
                 errors.append({"seed_url": bundle.seed_url, "detail": refusal})
@@ -721,6 +760,13 @@ async def finalize_node(
                 "evidence_urls": bundle.source_urls,
                 "extraction_completeness": completeness.as_dict(),
                 "discovery_run_id": runtime.run_id,
+                # The analyser already separates these three, and until now two
+                # of them were computed and thrown away. They are the details
+                # someone would otherwise have to dig through the award site to
+                # find, so they belong on the record: what you are judged on,
+                # and what you have to submit.
+                "judging_criteria": list(candidate.judging_criteria),
+                "application_requirements": list(candidate.application_requirements),
             }
         )
         if runtime.dry_run:

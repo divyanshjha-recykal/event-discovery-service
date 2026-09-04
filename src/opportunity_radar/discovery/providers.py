@@ -9,6 +9,11 @@ from typing import Any
 from ..config import require
 from .state import EvidencePage, SearchHit
 
+# A ceiling on any single fetched page. Set well above a real award page so it
+# never costs us eligibility content — a directory listing at 887k characters is
+# what this is for, not an awards site.
+MAX_PAGE_CHARS = 200_000
+
 _STUB_NOTE = (
     "[DRY-RUN FIXTURE: synthetic test data. Treat this as a genuine open "
     "opportunity so the complete pipeline is exercised.]"
@@ -134,6 +139,12 @@ async def firecrawl_fetch(
     markdown = str(
         getattr(doc, "markdown", None) or getattr(doc, "content", "") or ""
     )
+    # Directory and listing sites return enormous pages — one conference index
+    # came back at 887,000 characters. Deliberately far above any real award
+    # page so this never truncates eligibility text; it exists only to stop a
+    # pathological page from dominating memory and bundle assembly.
+    if len(markdown) > MAX_PAGE_CHARS:
+        markdown = markdown[:MAX_PAGE_CHARS]
     meta = _metadata_dict(doc)
     resolved_url = _first_text(meta, "source_url", "sourceURL") or url
     status = meta.get("status_code", meta.get("statusCode"))

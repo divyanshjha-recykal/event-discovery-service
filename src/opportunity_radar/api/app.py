@@ -108,7 +108,15 @@ async def state() -> dict:
         for result in eligibility.get("criteria_results", []):
             statuses[result["status"]] = statuses.get(result["status"], 0) + 1
 
+    latest_run_id = runs[0].get("run_id") if runs else None
+    for opp in opportunities:
+        opp["from_latest_run"] = (
+            latest_run_id is not None
+            and opp.get("discovery_run_id") == latest_run_id
+        )
+
     return {
+        "latest_run_id": latest_run_id,
         "metrics": {
             "opportunities": len(opportunities),
             "programs": len(programs),
@@ -324,6 +332,22 @@ async def run_eligibility(request: EligibilityRequest, background: BackgroundTas
 
     background.add_task(_go)
     return {"status": "running"}
+
+
+@app.post("/api/database/clear")
+async def clear_database() -> dict:
+    """Wipe every collection so a demo can start from nothing.
+
+    Destructive and deliberately explicit — the UI puts a confirmation in front
+    of it. It removes stored opportunities, the program registry, run history
+    and extraction failures; it does not touch the business profile or the
+    golden set, which are files.
+    """
+    deleted = {}
+    for name in (OPPORTUNITIES, PROGRAMS, RUNS, EXTRACTION_FAILURES):
+        result = await _db[name].delete_many({})
+        deleted[name] = result.deleted_count
+    return {"deleted": deleted}
 
 
 @app.get("/api/reference-sets")

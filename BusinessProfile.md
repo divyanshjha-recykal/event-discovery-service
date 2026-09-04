@@ -1,74 +1,136 @@
-# Recykal Business Profile — Phase 1 Operating Version
+# Retearn Business Profile
 
 ## How to use this document
 
-This is what the Discovery and Eligibility Agents know about Recykal. Read it as a full picture of the company, not a checklist. Where a fact is marked unknown or unverified, treat it as genuinely unknown, respond `unclear` rather than assuming either a positive or negative answer. Where a figure is approximate, it's still real and usable, cite it, just don't treat it as more precise than stated. Where a section notes that an operation is early-stage, weigh that honestly against criteria requiring an established track record, that's a real distinction, not a technicality.
+Facts below are stated directly. Where a field is genuinely unknown, it's marked **Not disclosed** or **Unknown**, treat that as `unclear`, not as a negative. Figures in lakh/crore are as reported internally; do not round or convert unless the criterion requires it.
 
-## About Recykal
+## About Retearn
 
-Recykal is a Hyderabad-based technology company, founded in 2016, that runs India's largest managed marketplace for the circular economy. It connects waste generators, aggregators, and recyclers on one platform, and layers a SaaS product on top for EPR compliance, traceability, and regulatory reporting. It works across plastic, e-waste, metal, paper, tyres, and batteries, and also runs Deposit Return System (DRS) deployments, reverse vending infrastructure that collects and refunds for recyclable containers, most notably a pilgrimage-site deployment at Kedarnath. It is privately held, at Series D funding stage, growing quickly, revenue up over 50% year on year as of FY26, and is beginning to extend beyond India into the Middle East and, in early planning, Europe and the UK. Its own stated mission is driving behavioural change for one billion people towards responsible waste management.
-
-That's the whole company in outline. Everything below fills in the specifics an eligibility judgement would actually need.
+Retearn Technologies Private Limited builds AI-powered reverse vending machines (RVMs) and Deposit Return System (DRS) infrastructure. Product line: **Reklaim PRO, ACE, Mini, Neo, FastScan**. Devices identify and sort PET, HDPE, LDPE, MLP, glass, and metal cans using edge AI, running fully offline on NVIDIA Jetson hardware, and pay users an instant UPI refund on deposit. Deployed across India, Bhutan, Mauritius, and the UK. Operates within the Recykal group.
 
 ## Identity
 
-- Legal entity: Rapidue Technologies Pvt. Ltd., operating publicly as Recykal
-- Founded: 2016, Hyderabad
-- HQ: Hi-Tech City, Whitefield, Kondapur, Hyderabad, Telangana 500032
-- Website: recykal.com
-- Leadership: Abhay Deshpande (Founder & CEO), Abhishek Deshpande (Co-Founder & COO/CBO), Ekta Narain (Co-Founder & CBO), Vikram Prabakar (Co-Founder & CTO), Anirudha Jalan (Co-Founder), Sujan Parthasaradhi (Co-Founder & CIO), Vijay Vanparthi (CFO)
+- Legal entity: **Retearn Technologies Private Limited**
+- Incorporated: **2024**, India
+- HQ: Gachibowli, Hyderabad, Telangana
+- Website: retearn.in
+- Nominated product: AI-Enabled Waste Collection & Recovery System — Reklaim Line
+- First commercial launch of the nominated product: **2024**
+- Relationship to Recykal: operates within the Recykal group; own legal entity and own financials, distinct from Recykal's (Rapidue Technologies Pvt. Ltd.)
+- Named leadership: **Not disclosed** in current records; do not assume Recykal's leadership applies to Retearn without confirmation
 
 ## Scale and financial standing
 
-Recykal is a well-funded, fast-growing private company, not a small operation, this matters for criteria that gate on scale or funding stage. FY26 gross revenue was ₹1,498 crore (roughly $180M), up 53.2% from ₹978 crore in FY25, a real and citable growth trajectory. It is at Series D, most recently raising a $23M bridge round in June 2026. Cumulative total funding across all rounds is not reliably known, public sources disagree by a wide margin, so do not cite a specific cumulative figure, revenue and the most recent round are the reliable numbers. Headcount is approximately 350-400, exact current figure unverified. MSME/Udyam registration and DPIIT Startup India recognition status are both unknown, treat criteria depending on either as unclear.
+- Employees on payroll: **38** (as of April 2026)
+- FY 2024–25 standalone revenue: **₹0.21 crore**
+- FY 2025–26 standalone revenue: **₹4.76 crore** (≈22x year-on-year growth)
+- FY 2025–26 ARR attributable to Reklaim: **₹4.76 crore** (i.e. effectively all revenue)
+- Revenue from AI products: **99%** of total
+- R&D / AI innovation spend: **80%** of FY 2025–26 revenue
+- Funding stage: **Bootstrapped**
+- MSME/Udyam registration, DPIIT recognition: **Not disclosed**
+
+Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+ informal workers onboarded, a 5-member on-ground team at Kedarnath) refer to livelihoods enabled through deployments, not Retearn's own payroll. Don't conflate the two on a headcount criterion.
 
 ## Sector and business model
 
-Recykal operates as an environmental services and waste management technology company, B2B in orientation. Its sub-sectors: EPR compliance software, plastics recycling marketplace, e-waste management, metal and paper recycling, tyre and battery recycling, and Deposit Return Systems. The business model is a managed marketplace, Recykal doesn't itself do the recycling, it connects and enables the generators, aggregators, and recyclers who do, while its SaaS layer handles compliance and traceability for producers under EPR obligations. Customers span brands and producers needing EPR compliance (B2B), the recyclers and aggregators on its marketplace (also B2B), and government or municipal bodies it partners with directly (B2G), the Kedarnath project being run in partnership with the Rudraprayag District Administration is a concrete example of the last category.
+- Sector: reverse vending hardware and Deposit Return System infrastructure, circular economy / waste-tech
+- Materials handled: PET, HDPE, LDPE, MLP, glass, metal cans
+- Business model: device sales/leasing, software and platform subscriptions, operations & maintenance services, DRS transaction/service fees, EPR and traceability solutions for brands, recovered-material value
+- Customers: B2B (brands, retailers, MRFs/ULBs) and B2G (municipal and state DRS programmes)
+- Platform integration: real-time traceability via CircularNet, from collection through recycling
 
 ## Operational scale in India
 
-This is the strongest, best-evidenced part of the profile, and the most useful for criteria that score on demonstrated impact rather than just eligibility. Recykal processed over 700,000 metric tons of waste in 2023 alone, up from over 200,000 MT in 2021 and over 30,000 MT of plastic in 2018, a real and accelerating growth curve. Since 2023 specifically, the company reports channelling 12 billion plastic bottles, and processing over 100,000 MT of metal and over 90,000 MT of paper and e-waste. Its marketplace connects over 325 recyclers and co-processors with over 3,000 waste aggregators, figures as of roughly 2023 and almost certainly larger now, current exact numbers unverified. Operations span 30+ states and union territories in India. Its flagship DRS project, at Kedarnath in Rudraprayag district, Uttarakhand, runs through 733+ partner shops and 12+ deposit refund centres, and has diverted over 163,000 bottles from Himalayan trenches and water bodies in that project alone.
+- **Char Dham circuit** (Kedarnath, Gangotri, Yamunotri, Badrinath): 30 lakh+ bottles collected and recycled across 105 collection points, impacting 16.5 lakh+ people along the 33 km Guptkashi–Kedarnath corridor
+- **Kedarnath dDRS pilot**: 1.63 lakh bottles prevented from entering Himalayan water bodies, 7.5 lakh bottles sent for recycling, 90% recycling rate, 9 sq km landfill space saved, 250+ MT coal saved, 38+ MT CO2e saved
+- Kedarnath context: ~10,000 kg waste generated daily during the Char Dham yatra against an influx of 10+ lakh pilgrims
+- Material contamination at deployment sites reduced from ~15% to **<1%**
+- FY 2025–26: 3.91 lakh plastic bottles collected via the ₹10 deposit-refund model
+- Collection rate: 12,36,450 QR codes issued vs 11,43,772 claimed, **93%** overall (Apr 2025–Mar 2026)
+- Collection-rate trend: **52%** (2022–23 pilot) → **92%** (2025–26)
+- **Pune MRF**: 10+ tonnes/day processed via AI-enabled sorting
+- **Goa DRS**: statewide rollout, 191 panchayats and 14 ULBs installing RVMs ahead of launch
+- **Chennai**: pilot under TASMAC
+- **Uttarakhand**: Deposit Refund System Experience Zones live in Bhimtal, Haldwani, Haridwar, Nainital
+- Named active deployment: Goa DRS; other markets listed under Primary Markets below
 
 ## International operations
 
-Recykal's international footprint is real but early. In Saudi Arabia, it has an active partnership with Aramco Digital, in place since February or March 2025, aligned with Saudi Vision 2030, this is a genuine operating relationship, not just an announcement, but it is not a registered, long-standing local operation with years of track record. Treat criteria requiring extended local operating history in Saudi Arabia as likely `not_met` or `unclear`, not `met`, even though the partnership itself is real and citable. In Europe and the UK, expansion was named as a specific use of funds in the June 2026 raise, via organic growth, partnerships, and potential acquisitions, but as of this version that is a stated intention, not yet an operating presence, do not treat Recykal as an established operator in Europe or the UK for eligibility purposes. No other international operations are confirmed. This section should be revisited as the international business develops, it's the part of the profile most likely to go stale fastest.
+- **Bhutan**: national-scale deployment. Gelephu Mindfulness City — 26 lakh+ bottles collected. Phuentsholing — 1.25 lakh+ bottles collected. Population participation exceeding **75%**. Refunds integrated with the Bank of Bhutan.
+- **Mauritius**: listed as a primary market served. No deployment-level figures disclosed.
+- **UK**: listed as a primary market served. No deployment-level figures disclosed.
+- Primary markets, as stated internally: India (Goa, Uttarakhand, Tamil Nadu, Himachal Pradesh, and other states), Bhutan, Mauritius, UK
 
 ## Technology
 
-Recykal describes its offering as AI-backed digital and hardware solutions for circularity, a description used in its own Aramco Digital partnership announcement. It uses Google's CircularNet model as part of its technology stack, and multiple independent sources reference IoT and traceability technology for real-time material tracking across its operations. No public information exists on patents held.
+- Hardware: Reklaim PRO, ACE, Mini, Neo, FastScan, modular form factor from 1 sq ft to 40 sq ft
+- Compute: on-device edge AI on NVIDIA Jetson modules (Nano/Orin/Xavier), no dependency on cloud connectivity for recognition
+- Model: CNN plus attention/transformer architecture, 5-level taxonomy (material → form → rigidity → condition → brand), built with Google under a Responsible AI framework
+- Sensing: fused RGB, Time-of-Flight depth, and NIR imaging with QR and telemetry data
+- Training data: 2M+ labeled waste images across 50+ Indian locations, covering crushed, wet, dirty, and label-removed items
+- Performance: >90% material detection accuracy across 200+ classes, ~60% contamination reduction, <20ms edge inference latency (raw model), <120ms for full on-device recognition + contamination detection + validation cycle
+- Model size: 60% smaller via quantization, deployed via TensorRT
+- Environmental resilience: solar-ready, operates -10°C to 60°C, proven at 11,750 ft altitude (Char Dham)
+- Language support: 5 Indian languages/dialects, configurable per deployment — English, Hindi, Telugu, Tamil, Marathi. Audio prompts, icons, and minimal-text UI for low-literacy users.
+- Fraud prevention: multi-factor verification, secure cloud telemetry, full audit trails
+- Patents: **1 granted** — "A Method and System for Automated Waste Counting, Identification, Classification, and Sorting with Artificial Intelligence," Indian Patent Office, granted **June 17, 2026**. **5 additional patents published** (not yet granted per current records).
+
+### Competitive position (as stated internally, vs named competitors)
+
+
+| Feature              | Retearn                                         | TOMRA (Norway)                   | Envipco (Netherlands)        |
+| -------------------- | ----------------------------------------------- | -------------------------------- | ---------------------------- |
+| Material recognition | 200+ classes                                    | 3 classes                        | 1–3 standardized types       |
+| Infrastructure need  | Offline, solar-ready, -10°C to 60°C             | Stable power + internet required | Controlled environment only  |
+| DRS dependency       | Works with or without DRS (92% collection)      | Requires mature DRS              | DRS-dependent only           |
+| Package handling     | Damaged, crushed, contaminated accepted         | Pristine bottles only            | Standardized containers only |
+| Informal sector      | Integrates and empowers (37.5% income increase) | Replaces workers                 | No integration               |
+| Form factor          | Modular, 1–40 sq ft                             | Fixed 200+ sq ft                 | Fixed 100–200 sq ft          |
+| Cost per unit        | ~1/10th of listed competitor cost               | $50K–$150K                       | $40K–$100K                   |
+
 
 ## Certifications and regulatory standing
 
-CPCB EPR registration is presumed, it's central to how the business operates, but the specific registration status and number are unconfirmed. ISO certifications and State Pollution Control Board approvals are both unknown. Treat any criterion requiring a specific certification number or registration ID as unclear rather than assuming compliance, even though the underlying regulatory relationship almost certainly exists.
+- ISO 14001:2015 (environmental management)
+- ISO 9001:2015 (quality management)
+- ISO 45001:2018 (occupational health and safety)
+- ISO/IEC 27001:2022 (information security)
+- ISO/IEC 27701:2019 (privacy information management)
+- EMI/EMC compliance for devices
+- DPDP Act (India) alignment claimed: data minimisation, purpose limitation, controlled retention, applicable user-data rights. This is a stated alignment, not a third-party certification.
+- CPCB EPR registration: **Not disclosed** for Retearn specifically
 
-## Sustainability and environmental impact, and how confidently to cite it
+## Sustainability and environmental impact
 
-The tonnage and bottle-count figures throughout this document are Recykal's own reported numbers. No independently audited CO2-equivalent figure or circularity-rate percentage has been found, and the methodology behind the reported figures isn't publicly detailed. That means: cite the tonnage and volume figures freely, they're real and specific, but treat any criterion that specifically requires third-party-audited environmental impact figures as unclear, not met, since that's a different, stricter bar than what's documented here.
+- 38+ MT CO2e saved, 250+ MT coal saved, 9 sq km landfill space saved — Kedarnath dDRS pilot specifically
+- 90% recycling rate at Kedarnath; contamination reduced from ~15% to <1% across deployment sites
+- 30 lakh+ bottles collected and recycled across the full Char Dham circuit
+- Figures above are internally reported; no independent third-party audit of these figures is on record
 
 ## Social impact
 
-The Kedarnath DRS project is the one specific, well-documented example of social impact: it created additional income sources for the local Safai Mitra waste-worker community as part of its operation, a concrete, citable fact. Company-wide figures on informal-sector livelihoods supported are not publicly available, treat broader claims about workforce inclusion or livelihood impact beyond the Kedarnath example as unclear.
+- 12,000+ informal waste workers digitally onboarded with transparent, traceable payment systems
+- 110+ jobs and new income streams created for pithuwalas, retailers, and waste workers at Kedarnath
+- 5-member all-women team leading on-ground collection and awareness at Kedarnath
+- 37.5% income increase for informal-sector workers integrated into the system (stated in competitive comparison vs TOMRA/Envipco)
+- Job creation stated as 10x versus traditional waste-management methods
 
 ## Recognition history
 
-Recykal has real, varied recognition, useful both as evidence of credibility for new applications and as the seed list for what to search for next:
-
-- NASSCOM Emerge 50 Awards (2019)
-- "Most Influential Sustainability Leaders of India," India Sustainability Leadership Summit 2019 (World Sustainability)
-- 3R Award for Excellence in Waste Management (2021)
-- Digital India Awards 2022 (conferred January 2023), Digital Initiatives in Collaboration with Startups category, for the Kedarnath DRS project, awarded by the President of India
-- Fortune "Change the World 2023" list
-- Most Trusted Brands of India 2024 (Marksmen Network, 4th edition)
-- Featured organisation profile on the World Economic Forum's site
+- Nasscom AI Game Changers Award 2024, "for pioneering circular technology" — stated on Retearn's own site; not independently verified in outside coverage
+- An internal nomination deck covering FY 2025–26 data and AI for Bharat / Social Impact AI categories exists, confirming Retearn actively prepares detailed award submissions; this is evidence of nomination activity, not confirmation of a specific win beyond the 2024 claim above
+- Recykal's own recognition history (NASSCOM Emerge 50, Digital India Awards for the Kedarnath DRS work, Fortune Change the World) remains relevant background given Retearn's role in that same Kedarnath project, but is Recykal's recognition, not Retearn's
 
 ## Known exclusions
 
-Recykal is not confirmed to operate in wet waste or composting. It is not a registered long-term operator outside India, see International Operations above. No prior disqualifications from any award or programme are on record. These are useful for ruling opportunities out quickly and confidently where the criteria don't fit, rather than reasoning through the full profile every time.
+- Not focused on beneficiary/welfare schemes: explicitly not built around PMJAY, PM-KISAN, Ayushman Bharat, or DigiLocker integration. Government integration is limited to waste-management, EPR, and DRS ecosystems via APIs and CircularNet.
+- AI is object-centric, not person-centric: no gender, caste, religion, ethnicity, or facial-recognition data used in device decision-making
+- No prior disqualifications from any award or programme are on record
 
 ## Standard descriptions
 
-- Mission, verbatim from Recykal's own materials: "driving behavioural change for one billion people towards responsible waste management"
-- One-sentence description: "Recykal is a Hyderabad-based technology company building India's largest managed marketplace for the circular economy, enabling EPR compliance, traceable recycling, and Deposit Return Systems for plastic, e-waste, metal, paper, tyres, and batteries, with an expanding footprint in the Middle East and early plans for Europe and the UK."
+- One-sentence description: "Retearn builds AI-powered reverse vending machines and Deposit Return System infrastructure, deployed across India, Bhutan, Mauritius, and the UK, running fully offline on edge AI hardware to identify, sort, and refund recyclable materials in real time."
 
 ---
+
