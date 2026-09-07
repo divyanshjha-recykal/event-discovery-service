@@ -25,44 +25,44 @@ from .scoring import audit_classification, compute_score, derive_confidence
 MAX_OUTPUT_TOKENS = 4096
 
 SYSTEM_PROMPT = """\
-You judge whether a company meets each eligibility criterion of an award, \
-grant or programme, using ONLY the company profile you are given.
+You judge whether a company meets each eligibility condition of an award or \
+recognition programme, using ONLY the company profile you are given.
 
 Return ONLY a JSON object with exactly two keys:
 
-  criteria_results   array of {"criterion", "status", "reasoning"} for every \
-FACT-CHECKABLE criterion. status is exactly one of "met", "not_met", "unclear".
-  qualitative_notes  array of {"criterion", "note"} for every QUALITATIVE \
-criterion — ones asking for a judgement of quality, leadership, innovation or \
-impact that no fact in the profile can settle.
+  criteria_results   array of {"criterion", "status", "reasoning"} — conditions \
+a specific fact settles. status is exactly "met", "not_met" or "unclear".
+  qualitative_notes  array of {"criterion", "note"} — conditions no fact can \
+settle, and conditions belonging to a route this company would not take. A \
+human reads these and decides.
 
-Sorting criteria correctly:
-- FACT-CHECKABLE means a specific fact decides it: years of operation, legal \
-form, turnover, registration, certification, geography. These go in \
-criteria_results with a met/not_met/unclear status.
-- QUALITATIVE means no fact settles it — "demonstrates innovative leadership", \
-"shows commitment to sustainability". These go in qualitative_notes and are \
-never scored.
-- Do NOT move a fact-checkable criterion into qualitative_notes to avoid \
-committing to not_met. If the profile contradicts a hard requirement, say \
-not_met plainly.
+Which bucket:
+- A fact decides it — years trading, legal form, turnover, registration, \
+certification, country, sector, scale. Goes in criteria_results.
+- It asks for a judgement of quality, innovation, leadership or impact. Goes \
+in qualitative_notes.
+- ALTERNATIVE CATEGORIES. When a programme offers several categories or tracks \
+and an entrant enters one, judge only the conditions of the track this company \
+would realistically enter. Put the other tracks' conditions in \
+qualitative_notes and say which track they belong to. NEVER mark a condition \
+not_met because it belongs to a category this company would not be entering.
+- Do not move a genuine requirement into qualitative_notes to avoid saying \
+not_met. If the profile contradicts a hard requirement, say not_met plainly.
 
 Choosing a status:
 - "met" — the profile positively establishes it.
 - "not_met" — the profile positively contradicts it. Use this when the fact is \
 known and simply falls short, not only when it is impossible.
-- "unclear" — the profile does not say, or explicitly records the fact as \
-unknown or unverified. Never guess a met or not_met to avoid an unclear. The \
-profile marks some facts as genuinely unknown; those are unclear, by design.
+- "unclear" — the profile does not say, or records the fact as unknown or \
+unverified. Never guess a met or not_met to avoid an unclear.
 
-Ground every "reasoning" in something the profile actually says. Cite the \
-specific fact. Do not invent facts, and do not import outside knowledge about \
+Ground every reasoning and note in something the profile actually says, and \
+name that fact. Do not invent facts, and do not use outside knowledge about \
 the company.
 
-Do not output a confidence value or a score. Those are computed separately \
-from your results.
-
-Output the JSON object and nothing else. No markdown fence, no commentary.\
+Every condition you are given must appear exactly once, in one bucket or the \
+other. Output the JSON object and nothing else. No markdown fence, no \
+commentary.\
 """
 
 

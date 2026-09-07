@@ -49,8 +49,8 @@ class EvidenceBundle:
     def source_urls(self) -> list[str]:
         return [page.url for page in self.pages]
 
-    @property
-    def combined_text(self) -> str:
+    def bounded_text(self, per_page_chars: int) -> str:
+        """Evidence with a per-page cap, so later pages survive truncation."""
         sections: list[str] = []
         for page in self.pages:
             header = [f"=== SOURCE PAGE: {page.url} ==="]
@@ -58,8 +58,14 @@ class EvidenceBundle:
                 header.append(f"Browser title: {page.title}")
             if page.description:
                 header.append(f"Meta description: {page.description}")
-            sections.append("\n".join(header) + "\n\n" + page.markdown)
+            sections.append(
+                "\n".join(header) + "\n\n" + page.markdown[:per_page_chars]
+            )
         return "\n\n".join(sections)
+
+    @property
+    def combined_text(self) -> str:
+        return self.bounded_text(10**9)
 
     def extraction_text(
         self,

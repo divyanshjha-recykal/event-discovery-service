@@ -76,22 +76,6 @@ EXTRACTION_JSON_SCHEMA = {
     "additionalProperties": False,
 }
 
-# Backstop only. Phrases that state closure outright, not ones that merely
-# discuss a past cycle.
-_CLOSED_PHRASES = re.compile(
-    r"\b("
-    r"nominations?\s+(?:are\s+|is\s+)?(?:now\s+)?closed|"
-    r"submissions?\s+(?:are\s+|is\s+)?(?:now\s+)?closed|"
-    r"applications?\s+(?:are\s+|is\s+)?(?:now\s+)?closed|"
-    r"entries?\s+(?:are\s+|is\s+)?(?:now\s+)?closed|"
-    r"registration\s+(?:is\s+)?(?:now\s+)?closed|"
-    r"nomination\s+window\s+is\s+(?:currently\s+)?closed|"
-    r"no\s+longer\s+accepting\s+(?:applications|nominations|entries)|"
-    r"this\s+(?:award|call|programme|program)\s+(?:has\s+)?closed"
-    r")",
-    re.IGNORECASE,
-)
-
 SYSTEM_PROMPT = """\
 You extract one targeted structured record about an award, grant, event or \
 conference from an evidence bundle. A bundle can contain several official pages \
@@ -401,15 +385,13 @@ def _build_record(
     payload: dict, scraped_text: str, source_url: str, page_title: str | None = None
 ) -> OpportunityRecord | ExtractionFailure:
     """Turn a parsed model reply into a record, or say why it cannot be one."""
-    # Closed check: the model's semantic judgement, with the regex behind it.
-    model_status = str(payload.get("status", "")).strip().lower()
-    phrase = _CLOSED_PHRASES.search(scraped_text)
-    if model_status == "closed" or phrase:
-        stated_by = "model status" if model_status == "closed" else "page text"
-        quoted = f" ({phrase.group(0)!r})" if phrase else ""
+    # Closed is the model's judgement alone. The keyword backstop that used to
+    # sit behind it read wording, not meaning, and outvoted a model that had
+    # read the whole page.
+    if str(payload.get("status", "")).strip().lower() == "closed":
         return ExtractionFailure(
             FailureReason.OPPORTUNITY_CLOSED,
-            f"page indicates the opportunity is closed, per {stated_by}{quoted}",
+            "page indicates the opportunity is closed, per model status",
             source_url,
         )
 

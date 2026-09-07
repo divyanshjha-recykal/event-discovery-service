@@ -107,6 +107,12 @@ Identity key: `organizing_body + base_title` (no year). New edition for an exist
 
 The per-criterion reasoning is correct in these cases; only the aggregate score misleads. Deferred rather than fixed because it has appeared in 1 of 11 records, and the fix is a two-level schema change (program-wide criteria that all apply, plus optional named tracks where any one may satisfy) landing too close to the September 7 presentation. Until then, Stage 5 shows per-criterion verdicts and reasoning rather than a headline score, so nothing rests on the misleading number.
 
+**Grants are out of scope for discovery.** The business wants recognition, not
+funding, so query planning and analysis exclude grant, funding and fellowship
+programmes. `"grant"` stays in the stored `category` enum — removing it would
+break validation when reading records already saved — but nothing new should
+arrive with it.
+
 ## Not building this phase
 
 Auto-submission, multi-recipient notification routing, embedding-based matching, queue-based parallel scraping, an approve/reject review UI, a local Ollama fallback. Do not scaffold these preemptively, build only what the current stage requires.

@@ -15,6 +15,8 @@ const STAGES = ['plan', 'research', 'analyze', 'finalize']
 const STAGE_OF = {
   plan: 'plan',
   search: 'research',
+  shortlist: 'research',
+  select_links: 'research',
   scrape: 'research',
   analyze: 'analyze',
   extract: 'finalize',
@@ -64,11 +66,8 @@ function Metrics({ m }) {
       <Stat n={`${m.extraction_success}/${m.extraction_success + m.extraction_failed}`}
             l="latest-run extractions succeeded" />
       <div className="card stat" style={{ marginBottom: 0 }}>
-        <div className="n">
-          {verdicts.high}<span className="muted" style={{ fontSize: 14 }}> high</span>{' '}
-          {verdicts.low}<span className="muted" style={{ fontSize: 14 }}> low</span>
-        </div>
-        <div className="l">confidence · {verdicts.unevaluated} unevaluated</div>
+        <div className="n">{total}</div>
+        <div className="l">conditions checked · {verdicts.unevaluated} unevaluated</div>
         {total > 0 && (
           <>
             <div className="bar" style={{ marginTop: 10 }}>
@@ -77,7 +76,8 @@ function Metrics({ m }) {
               <i className="unclear" style={{ width: `${(criteria.unclear / total) * 100}%` }} />
             </div>
             <div className="l" style={{ marginTop: 6 }}>
-              {criteria.met} met · {criteria.not_met} not met · {criteria.unclear} unclear
+              {criteria.met} met · {criteria.not_met} not met ·{' '}
+              {criteria.unclear} for you to judge
             </div>
           </>
         )}
@@ -122,14 +122,39 @@ function Step({ e }) {
   const bad = e.outcome === 'failed' || e.outcome === 'insufficient'
   return (
     <div className={`step ${e.tool}${bad ? ' failed' : ''}`}>
-      <div className="t">t+{e.t}s</div>
+      <div className="t">
+        t+{e.t}s
+        {e.node && <div className="muted small">{e.node}</div>}
+      </div>
       <div className="tool">{e.tool}</div>
       <div>
-        {e.tool === 'plan' && <div className="muted small">query plan produced</div>}
+        {e.tool === 'plan' && (
+          <div>
+            {e.outcome === 'fallback' && (
+              <div className="small err" style={{ marginBottom: 6 }}>
+                ⚠ planner model call failed — using the deterministic fallback plan. {e.detail}
+              </div>
+            )}
+            <div className="muted small">
+              {(e.queries || []).length} broad quer{(e.queries || []).length === 1 ? 'y' : 'ies'} planned
+            </div>
+            {(e.queries || []).map((q, i) => (
+              <div key={i} style={{ marginTop: 6 }}>
+                <div className="mono">{q.query}</div>
+                <div className="small muted">{q.rationale}</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {e.tool === 'search' && (
           <>
             <div className="mono">{e.query}</div>
+            <div className="row" style={{ marginTop: 4 }}>
+              {e.round && <span className="pill muted">round: {e.round}</span>}
+              {e.geography && <span className="pill muted">{e.geography}</span>}
+            </div>
+            {e.rationale && <div className="small muted" style={{ marginTop: 4 }}>{e.rationale}</div>}
             <details style={{ marginTop: 8 }}>
               <summary className="muted small">{(e.results || []).length} result(s)</summary>
               {(e.results || []).map((r) => (
@@ -139,6 +164,42 @@ function Step({ e }) {
               ))}
             </details>
           </>
+        )}
+
+        {e.tool === 'shortlist' && (
+          <div>
+            <span className={`pill ${e.outcome === 'ok' ? 'muted' : 'not_met'}`}>
+              {e.outcome === 'ok'
+                ? `${(e.picked || []).length} of ${e.considered} chosen to research`
+                : `shortlist failed — fell back to ranking (${e.considered} hits)`}
+            </span>
+            {(e.picked || []).map((p, i) => (
+              <div key={i} style={{ marginTop: 6 }}>
+                <strong>{p.title}</strong>
+                <div className="u mono small">{p.url}</div>
+                <div className="small muted">{p.reason}</div>
+              </div>
+            ))}
+            {e.detail && <div className="small err" style={{ marginTop: 4 }}>{e.detail}</div>}
+          </div>
+        )}
+
+        {e.tool === 'select_links' && (
+          <div>
+            <a href={e.url} target="_blank" rel="noreferrer" className="mono small">{e.url}</a>
+            <div className="row" style={{ marginTop: 4 }}>
+              <span className={`pill ${e.outcome === 'ok' ? 'muted' : 'not_met'}`}>
+                {e.outcome === 'ok'
+                  ? `${(e.picked || []).length} of ${e.considered} links followed`
+                  : 'link selection failed — fell back to keyword score'}
+              </span>
+            </div>
+            {(e.picked || []).map((u, i) => (
+              <div className="u mono small" key={i}>{u}</div>
+            ))}
+            {e.reason && <div className="small muted" style={{ marginTop: 4 }}>{e.reason}</div>}
+            {e.detail && <div className="small err" style={{ marginTop: 4 }}>{e.detail}</div>}
+          </div>
         )}
 
         {e.tool === 'scrape' && (
@@ -219,6 +280,15 @@ function Step({ e }) {
 
 /* ----------------------------------------------------------- opportunity */
 
+/* "unclear" and "qualitative" both mean the same thing to a reader: a human
+   decides. One label, one bucket, nothing hidden. */
+const VERDICT = {
+  met: { label: 'Met', cls: 'met', order: 0 },
+  not_met: { label: 'Not met', cls: 'not_met', order: 1 },
+  unclear: { label: 'Your call', cls: 'unclear', order: 2 },
+  qualitative: { label: 'Your call', cls: 'unclear', order: 2 },
+}
+
 function Opportunity({ o, latest }) {
   const e = o.eligibility
   const requirements = o.application_requirements || []
@@ -230,7 +300,10 @@ function Opportunity({ o, latest }) {
     ...(e?.qualitative_notes || []).map((n) => ({
       criterion: n.criterion, verdict: 'qualitative', reason: n.note,
     })),
-  ]
+  ].sort((a, b) => (VERDICT[a.verdict]?.order ?? 3) - (VERDICT[b.verdict]?.order ?? 3))
+  const judgeCount = rows.filter(
+    (r) => r.verdict === 'unclear' || r.verdict === 'qualitative',
+  ).length
 
   return (
     <div className={`opp${latest ? ' latest' : ''}`}>
@@ -243,7 +316,6 @@ function Opportunity({ o, latest }) {
           {o.submission_deadline || 'no deadline'}
           {o.submission_deadline && (o.deadline_verified ? ' ✓' : ' unverified')}
         </span>
-        {e && <span className={`pill ${e.confidence}`}>confidence: {e.confidence}</span>}
         {o.dry_run && <span className="pill unclear">fixture</span>}
       </div>
       <a className="src mono" href={o.source_url} target="_blank" rel="noreferrer">
@@ -294,18 +366,20 @@ function Opportunity({ o, latest }) {
               {rows.map((r, i) => (
                 <tr key={i}>
                   <td>{r.criterion}</td>
-                  <td><span className={`pill ${r.verdict}`}>{r.verdict.replace('_', ' ')}</span></td>
+                  <td>
+                    <span className={`pill ${VERDICT[r.verdict]?.cls || 'muted'}`}>
+                      {VERDICT[r.verdict]?.label || r.verdict}
+                    </span>
+                  </td>
                   <td className="why">{r.reason}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <p className="small muted" style={{ marginTop: 8 }}>
-            score {e.score === null ? 'n/a' : e.score.toFixed(2)} · confidence {e.confidence} ·{' '}
-            {e.criteria_results.filter((r) => r.status === 'met').length} met,{' '}
-            {e.criteria_results.filter((r) => r.status === 'not_met').length} not met,{' '}
-            {e.criteria_results.filter((r) => r.status === 'unclear').length} unclear,{' '}
-            {e.qualitative_notes.length} qualitative
+            {e.criteria_results.filter((r) => r.status === 'met').length} met ·{' '}
+            {e.criteria_results.filter((r) => r.status === 'not_met').length} not met ·{' '}
+            {judgeCount} for you to judge
           </p>
           {(e.classification_flags || []).map((f, i) => <div className="flag" key={i}>⚠ {f}</div>)}
         </>
@@ -331,8 +405,9 @@ export default function App() {
   const [run, setRun] = useState(null)
   const [runId, setRunId] = useState(null)
   const [model, setModel] = useState(MODELS[0])
-  const [budget, setBudget] = useState(18)
+  const [budget, setBudget] = useState(40)
   const [busy, setBusy] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [error, setError] = useState(null)
   const [confirmClear, setConfirmClear] = useState(false)
   const timer = useRef(null)
@@ -351,6 +426,7 @@ export default function App() {
         const r = await api(`/api/runs/${runId}`)
         setRun(r)
         if (r.status !== 'running') {
+          setStopping(false)
           refresh()
           if (r.eligibility_done !== undefined || pollsAfterDone.current++ > 12) {
             clearInterval(timer.current); setBusy(false)
@@ -364,7 +440,8 @@ export default function App() {
   }, [runId, refresh])
 
   const start = async (path, dry) => {
-    setBusy(true); setError(null); setRun(null); pollsAfterDone.current = 0
+    setBusy(true); setStopping(false); setError(null); setRun(null)
+    pollsAfterDone.current = 0
     try {
       const r = await api(path, {
         method: 'POST',
@@ -373,6 +450,15 @@ export default function App() {
       if (r.run_id) setRunId(r.run_id)
       else setTimeout(() => { refresh(); setBusy(false) }, 4000)
     } catch (e) { setError(e.message); setBusy(false) }
+  }
+
+  // Cancels the budget server-side; the run then refuses paid tools but still
+  // saves whatever it has already extracted.
+  const stopRun = async () => {
+    if (!runId) return
+    setStopping(true)
+    try { await api(`/api/runs/${runId}/stop`, { method: 'POST' }) }
+    catch (e) { setError(e.message); setStopping(false) }
   }
 
   const clearDatabase = async () => {
@@ -386,6 +472,8 @@ export default function App() {
   const opportunities = data?.opportunities || []
   const latest = opportunities.filter((o) => o.from_latest_run)
   const evaluated = opportunities.filter((o) => o.eligibility)
+  const dated = evaluated.filter((o) => o.submission_deadline || o.event_date)
+  const undated = evaluated.filter((o) => !o.submission_deadline && !o.event_date)
 
   return (
     <div className="wrap">
@@ -398,11 +486,16 @@ export default function App() {
         <select value={model} onChange={(ev) => setModel(ev.target.value)}>
           {MODELS.map((m) => <option key={m}>{m}</option>)}
         </select>
-        <input type="number" min="1" max="60" value={budget} style={{ width: 68 }}
+        <input type="number" min="1" max="80" value={budget} style={{ width: 68 }}
                onChange={(ev) => setBudget(ev.target.value)} />
         <button onClick={() => start('/api/pipeline', false)} disabled={busy}>
           {busy ? 'Running…' : '▶ Run full pipeline'}
         </button>
+        {busy && runId && (
+          <button className="ghost stop" onClick={stopRun} disabled={stopping}>
+            {stopping ? 'Stopping…' : '■ Stop'}
+          </button>
+        )}
         <button className="ghost" onClick={() => start('/api/runs', false)} disabled={busy}>Discovery</button>
         <button className="ghost" onClick={() => start('/api/eligibility', false)} disabled={busy}>Eligibility</button>
         <button className="ghost" onClick={() => start('/api/pipeline', true)} disabled={busy}>Dry run</button>
@@ -487,12 +580,22 @@ export default function App() {
       </div>
 
       <div className="card">
-        <h2>All evaluated opportunities <span className="count">— {evaluated.length}</span></h2>
+        <h2>Dated and open <span className="count">— {dated.length}</span></h2>
         <p className="muted small" style={{ marginTop: -6 }}>
-          Every opportunity with an eligibility verdict, across all runs.
+          A deadline was found on the source page. These are the actionable ones.
         </p>
-        {evaluated.map((o) => <Opportunity key={`all-${o.source_url}`} o={o} />)}
-        {!evaluated.length && <p className="muted tight">None evaluated yet.</p>}
+        {dated.map((o) => <Opportunity key={`d-${o.source_url}`} o={o} />)}
+        {!dated.length && <p className="muted tight">None with a confirmed deadline yet.</p>}
+      </div>
+
+      <div className="card">
+        <h2>No date confirmed <span className="count">— {undated.length}</span></h2>
+        <p className="muted small" style={{ marginTop: -6 }}>
+          Real programmes, but no deadline was found in the evidence — check the
+          source page before relying on these.
+        </p>
+        {undated.map((o) => <Opportunity key={`u-${o.source_url}`} o={o} />)}
+        {!undated.length && <p className="muted tight">None.</p>}
       </div>
 
       <div className="card">

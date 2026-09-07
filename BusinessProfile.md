@@ -40,7 +40,7 @@ Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+
 - Customers: B2B (brands, retailers, MRFs/ULBs) and B2G (municipal and state DRS programmes)
 - Platform integration: real-time traceability via CircularNet, from collection through recycling
 
-## Operational scale in India(PRIMARY BUSINESS Region)
+## Operational scale in India
 
 - **Char Dham circuit** (Kedarnath, Gangotri, Yamunotri, Badrinath): 30 lakh+ bottles collected and recycled across 105 collection points, impacting 16.5 lakh+ people along the 33 km Guptkashi–Kedarnath corridor
 - **Kedarnath dDRS pilot**: 1.63 lakh bottles prevented from entering Himalayan water bodies, 7.5 lakh bottles sent for recycling, 90% recycling rate, 9 sq km landfill space saved, 250+ MT coal saved, 38+ MT CO2e saved
@@ -55,7 +55,7 @@ Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+
 - **Uttarakhand**: Deposit Refund System Experience Zones live in Bhimtal, Haldwani, Haridwar, Nainital
 - Named active deployment: Goa DRS; other markets listed under Primary Markets below
 
-## International operations(Secondary)
+## International operations
 
 - **Bhutan**: national-scale deployment. Gelephu Mindfulness City — 26 lakh+ bottles collected. Phuentsholing — 1.25 lakh+ bottles collected. Population participation exceeding **75%**. Refunds integrated with the Bank of Bhutan.
 - **Mauritius**: listed as a primary market served. No deployment-level figures disclosed.
@@ -75,20 +75,6 @@ Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+
 - Language support: 5 Indian languages/dialects, configurable per deployment — English, Hindi, Telugu, Tamil, Marathi. Audio prompts, icons, and minimal-text UI for low-literacy users.
 - Fraud prevention: multi-factor verification, secure cloud telemetry, full audit trails
 - Patents: **1 granted** — "A Method and System for Automated Waste Counting, Identification, Classification, and Sorting with Artificial Intelligence," Indian Patent Office, granted **June 17, 2026**. **5 additional patents published** (not yet granted per current records).
-
-### Competitive position (as stated internally, vs named competitors)
-
-
-| Feature              | Retearn                                         | TOMRA (Norway)                   | Envipco (Netherlands)        |
-| -------------------- | ----------------------------------------------- | -------------------------------- | ---------------------------- |
-| Material recognition | 200+ classes                                    | 3 classes                        | 1–3 standardized types       |
-| Infrastructure need  | Offline, solar-ready, -10°C to 60°C             | Stable power + internet required | Controlled environment only  |
-| DRS dependency       | Works with or without DRS (92% collection)      | Requires mature DRS              | DRS-dependent only           |
-| Package handling     | Damaged, crushed, contaminated accepted         | Pristine bottles only            | Standardized containers only |
-| Informal sector      | Integrates and empowers (37.5% income increase) | Replaces workers                 | No integration               |
-| Form factor          | Modular, 1–40 sq ft                             | Fixed 200+ sq ft                 | Fixed 100–200 sq ft          |
-| Cost per unit        | ~1/10th of listed competitor cost               | $50K–$150K                       | $40K–$100K                   |
-
 
 ## Certifications and regulatory standing
 
@@ -113,7 +99,7 @@ Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+
 - 12,000+ informal waste workers digitally onboarded with transparent, traceable payment systems
 - 110+ jobs and new income streams created for pithuwalas, retailers, and waste workers at Kedarnath
 - 5-member all-women team leading on-ground collection and awareness at Kedarnath
-- 37.5% income increase for informal-sector workers integrated into the system (stated in competitive comparison vs TOMRA/Envipco)
+- 37.5% income increase for informal-sector workers integrated into the system
 - Job creation stated as 10x versus traditional waste-management methods
 
 ## Recognition history

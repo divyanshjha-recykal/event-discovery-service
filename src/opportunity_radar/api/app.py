@@ -178,9 +178,24 @@ async def _skipped_pages() -> list[dict]:
     return [_jsonable(v) for v in [*decided.values(), *implicit.values()]]
 
 
+# Budgets of runs currently in flight, so /stop can cancel one. A cancelled
+# budget refuses every paid tool but still allows saves.
+_ACTIVE: dict[str, RunBudget] = {}
+
+
+@app.post("/api/runs/{run_id}/stop")
+async def stop_run(run_id: str) -> dict:
+    """Cancel a run in flight. Work already paid for still reaches storage."""
+    budget = _ACTIVE.get(run_id)
+    if budget is None:
+        raise HTTPException(status_code=404, detail=f"no active run {run_id}")
+    budget.cancel("stopped from the dashboard")
+    return {"run_id": run_id, "status": "stopping"}
+
+
 class PipelineRequest(BaseModel):
     model: str | None = None
-    budget: int = Field(default=18, ge=1, le=60)
+    budget: int = Field(default=40, ge=1, le=80)
     queries: list[str] = Field(default_factory=list)
     dry_run: bool = False
 
@@ -198,6 +213,7 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
     profile = load_business_profile()
 
     async def _go() -> None:
+        _ACTIVE[run_id] = budget
         try:
             discovery = await run_discovery(
                 _db, queries=request.queries or None,
@@ -209,6 +225,7 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
                 {"run_id": run_id},
                 {"$set": {"status": "failed", "summary": f"{type(exc).__name__}: {exc}"}},
             )
+            _ACTIVE.pop(run_id, None)
             return
 
         # Eligibility is a separate stage and runs only on actionable records
@@ -253,6 +270,7 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
                 }
             },
         )
+        _ACTIVE.pop(run_id, None)
 
     background.add_task(_go)
     return {"run_id": run_id, "status": "running"}
@@ -268,7 +286,7 @@ async def get_run_detail(run_id: str) -> dict:
 
 class RunRequest(BaseModel):
     model: str | None = None
-    budget: int = Field(default=18, ge=1, le=60)
+    budget: int = Field(default=40, ge=1, le=80)
     queries: list[str] = Field(default_factory=list)
     dry_run: bool = False
 
@@ -285,6 +303,7 @@ async def start_discovery(request: RunRequest, background: BackgroundTasks) -> d
     budget = RunBudget(tool_calls=request.budget)
 
     async def _go() -> None:
+        _ACTIVE[run_id] = budget
         try:
             await run_discovery(
                 _db,
@@ -299,6 +318,8 @@ async def start_discovery(request: RunRequest, background: BackgroundTasks) -> d
                 {"run_id": run_id},
                 {"$set": {"status": "failed", "summary": f"{type(exc).__name__}: {exc}"}},
             )
+        finally:
+            _ACTIVE.pop(run_id, None)
 
     background.add_task(_go)
     return {"run_id": run_id, "status": "running"}

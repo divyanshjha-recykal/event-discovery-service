@@ -22,17 +22,6 @@ from datetime import date
 # unrelated date elsewhere on the page does not accidentally qualify.
 PROXIMITY_CHARS = 250
 
-_DEADLINE_LANGUAGE = re.compile(
-    r"\b("
-    r"deadline|last\s+date|closing\s+date|closes?\b|closed\b|"
-    r"due\s+(?:date|by|on)|submit\s+by|submission[s]?\b|apply\s+by|"
-    r"applications?\s+(?:close|due|accepted)|entries?\s+close|"
-    r"nominations?\s+(?:close|due)|cut[-\s]?off|final\s+date|"
-    r"last\s+day|valid\s+(?:till|until)|open\s+(?:till|until)"
-    r")",
-    re.IGNORECASE,
-)
-
 _MONTHS = {
     1: ("january", "jan"), 2: ("february", "feb"), 3: ("march", "mar"),
     4: ("april", "apr"), 5: ("may",), 6: ("june", "jun"),
@@ -102,29 +91,20 @@ def verify_deadline(deadline: str | None, source_text: str) -> GroundingResult:
     except (ValueError, TypeError):
         return GroundingResult(False, None, f"deadline {deadline!r} is not an ISO date")
 
-    anchors = [m.span() for m in _DEADLINE_LANGUAGE.finditer(source_text)]
-    if not anchors:
-        return GroundingResult(
-            False, None, "no deadline language found anywhere in the source text"
-        )
-
-    found_anywhere: str | None = None
-
+    # The check is that the model did not invent the date: the day and month
+    # must appear verbatim in the page. It no longer also demands a "deadline"
+    # word nearby — that caged a mechanical anti-hallucination check behind a
+    # keyword list, so a date in a table or after wording we had not listed
+    # failed verification despite being right there on the page.
     for pattern in _day_month_patterns(parsed.day, parsed.month):
-        for match in pattern.finditer(source_text):
-            found_anywhere = found_anywhere or match.group(0)
-            start, end = match.span()
-            for a_start, a_end in anchors:
-                # Near = the date and the deadline phrase overlap or sit within
-                # PROXIMITY_CHARS of each other, in either order.
-                distance = max(a_start - end, start - a_end, 0)
-                if distance <= PROXIMITY_CHARS:
-                    return GroundingResult(
-                        True,
-                        match.group(0),
-                        f"day and month found verbatim {distance} chars from deadline language",
-                    )
+        match = pattern.search(source_text)
+        if match:
+            return GroundingResult(
+                True, match.group(0),
+                "day and month found verbatim in the source text",
+            )
 
+    found_anywhere = None
     if found_anywhere:
         return GroundingResult(
             False,

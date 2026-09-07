@@ -137,7 +137,11 @@ input, select {
 .step.extract .tool,
 .step.save_opportunity .tool { color: var(--ok); }
 .step.plan .tool, .step.analyze .tool { color: var(--warn); }
+.step.refine .tool, .step.shortlist .tool,
+.step.select_links .tool { color: var(--accent); }
 .step.failed .tool, .step.insufficient .tool { color: var(--bad); }
+
+button.ghost.stop { color: var(--bad); border-color: var(--bad); }
 
 details {
   border: 1px solid var(--border); border-radius: 8px;

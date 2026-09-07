@@ -50,14 +50,26 @@ def stage_span(name: str, **metadata):
     raises on a tracing problem — an untraced step is a lost detail, a crashed
     run is a lost run.
     """
-    client = langfuse_client()
+    # Only tracing setup is guarded. An exception from the caller's body must
+    # propagate unchanged — catching it here and yielding again turns every
+    # error into "generator didn't stop after throw()" and loses the real cause.
     try:
-        with client.start_as_current_observation(name=name, as_type="span") as span:
-            if metadata:
-                span.update(metadata={k: v for k, v in metadata.items() if v is not None})
-            yield span
+        observation = langfuse_client().start_as_current_observation(
+            name=name, as_type="span"
+        )
     except Exception:  # noqa: BLE001 — tracing must not break the pipeline
         yield _NullSpan()
+        return
+
+    with observation as span:
+        try:
+            if metadata:
+                span.update(
+                    metadata={k: v for k, v in metadata.items() if v is not None}
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        yield span
 
 
 class _NullSpan:

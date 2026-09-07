@@ -9,10 +9,15 @@ from typing import Any
 from ..config import require
 from .state import EvidencePage, SearchHit
 
-# A ceiling on any single fetched page. Set well above a real award page so it
-# never costs us eligibility content — a directory listing at 887k characters is
-# what this is for, not an awards site.
+# Ceiling on one fetched page, set far above any real award page — this exists
+# only to stop a pathological directory listing dominating the bundle.
 MAX_PAGE_CHARS = 200_000
+
+# Never worth a search slot: these host no entry pages.
+EXCLUDED_DOMAINS = (
+    "facebook.com", "linkedin.com", "instagram.com", "x.com", "twitter.com",
+    "youtube.com", "reddit.com", "pinterest.com", "tiktok.com",
+)
 
 _STUB_NOTE = (
     "[DRY-RUN FIXTURE: synthetic test data. Treat this as a genuine open "
@@ -33,7 +38,7 @@ _STUB_PAGE = (
 
 
 async def tavily_search(
-    query: str, *, max_results: int = 5, dry_run: bool = False
+    query: str, *, max_results: int = 7, dry_run: bool = False
 ) -> list[SearchHit]:
     if dry_run:
         return [
@@ -51,11 +56,15 @@ async def tavily_search(
     from tavily import TavilyClient  # pylint: disable=import-error,import-outside-toplevel
 
     client = TavilyClient(api_key=require("TAVILY_API_KEY"))
+    # No `country`: measured against live queries it never biased toward the
+    # named market, and combined with the market in the query text it returned
+    # zero results. Geography belongs in the query text, which does work.
     payload = await asyncio.to_thread(
         client.search,
         query,
         max_results=max_results,
         search_depth="advanced",
+        exclude_domains=list(EXCLUDED_DOMAINS),
     )
     return [
         SearchHit(

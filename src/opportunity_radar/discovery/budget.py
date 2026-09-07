@@ -19,11 +19,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-DEFAULT_TOOL_CALLS = 25
-DEFAULT_MAX_SEARCHES = 10
-DEFAULT_MAX_SCRAPES = 12
-DEFAULT_MAX_LLM_CALLS = 8
-DEFAULT_WALL_CLOCK_SECONDS = 600
+DEFAULT_TOOL_CALLS = 40
+DEFAULT_MAX_SEARCHES = 12
+DEFAULT_MAX_SCRAPES = 14
+DEFAULT_MAX_LLM_CALLS = 16
+DEFAULT_WALL_CLOCK_SECONDS = 900
 
 
 class BudgetExhausted(RuntimeError):
@@ -77,6 +77,11 @@ class RunBudget:
         if tool_name in self.FREE_TOOLS and not self.timed_out:
             return None
 
+        # A cancelled run refuses everything but the free tools above, so work
+        # already paid for still reaches storage.
+        if self.stop_reason:
+            return f"STOP: {self.stop_reason}. No further tool calls are possible."
+
         if self.timed_out:
             self.stop_reason = self.stop_reason or (
                 f"wall-clock limit of {self.wall_clock_seconds}s reached"
@@ -116,7 +121,14 @@ class RunBudget:
     # the best one because the budget ran out on the save, one call after the
     # expensive work was already paid for.
     FREE_TOOLS = frozenset({"read_memory", "save_opportunity"})
-    LLM_TOOLS = frozenset({"plan", "analyze", "extract"})
+    LLM_TOOLS = frozenset(
+        {"plan", "shortlist", "select_links", "analyze", "extract"}
+    )
+
+    def cancel(self, reason: str = "stopped by the operator") -> None:
+        """Stop the run at its next tool call. Saves still go through."""
+        self.stop_reason = self.stop_reason or reason
+        self.log.append(f"  --. CANCELLED: {reason} (t+{self.elapsed:.0f}s)")
 
     def consume(self, tool_name: str) -> None:
         refusal = self.refusal(tool_name)

@@ -1,4 +1,4 @@
-"""Site-agnostic candidate ranking and bounded same-domain traversal."""
+"""Bounded same-domain traversal. Which links to follow is the model's call."""
 
 from __future__ import annotations
 
@@ -18,32 +18,6 @@ from urllib.parse import (
 from .providers import firecrawl_fetch
 from .state import EvidenceBundle, EvidencePage, SearchHit, WorkflowRuntime
 
-_POSITIVE = re.compile(
-    r"\b(apply|application|nominate|nomination|enter|entry|eligible|criteria|"
-    r"categor|guideline|timeline|deadline|register|award|grant|brochure|terms)\b",
-    re.IGNORECASE,
-)
-_NEGATIVE = re.compile(
-    r"\b(winner|result|recap|gallery|privacy|cookie|login|sign[-_ ]?in|"
-    r"sponsor|contact|press[-_ ]?release|news|speaker|create[-_ ]?account|"
-    r"submit[-_ ]?(?:an[-_ ])?event|add[-_ ]?event)\b",
-    re.IGNORECASE,
-)
-_DIRECTORY = re.compile(
-    r"\b(list of|directory|conference alerts?|conferences?\s+20\d{2}\s*[/,-]\s*20\d{2}|"
-    r"upcoming conferences)\b",
-    re.IGNORECASE,
-)
-_SECONDARY_SOURCE = re.compile(
-    r"(?:^|[/_-])(news|article|blog|press[-_ ]?release|opinion)(?:[/_-]|$)|"
-    r"\b(reports?|announces?|announced|launches?|launched|extends?|extended|coverage)\b",
-    re.IGNORECASE,
-)
-_OPEN_SIGNAL = re.compile(
-    r"\b(applications?|entries|nominations?|registration)\s+"
-    r"(?:are\s+|is\s+)?(?:now\s+)?open\b|\bapply\s+now\b|\bsubmit\b",
-    re.IGNORECASE,
-)
 _MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 
 # Firecrawl cannot read raster images and errors on them, so following one is a
@@ -97,73 +71,26 @@ def canonicalize_url(url: str) -> str:
     return urlunsplit((scheme, netloc, path, query, ""))
 
 
-def rank_search_hit(hit: SearchHit, *, current_year: int) -> float:
-    text = f"{hit.title} {hit.url} {hit.snippet}"
-    score = 0.0
-    score += min(len(_POSITIVE.findall(text)), 4) * 1.5
-    score -= min(len(_NEGATIVE.findall(text)), 3) * 2.0
-    if str(current_year) in text:
-        score += 2.5
-    if str(current_year + 1) in text:
-        score += 2.0
-    for year in re.findall(r"\b20\d{2}\b", text):
-        if int(year) < current_year:
-            score -= 3.0
-    path = urlparse(hit.url).path
-    if path in ("", "/"):
-        score -= 0.5
-    if _DIRECTORY.search(text):
-        score -= 6.0
-    if _SECONDARY_SOURCE.search(
-        f"{urlparse(hit.url).path} {hit.title}"
-    ):
-        score -= 12.0
-    if (
-        re.search(r"\bconferences\b", hit.title, re.IGNORECASE)
-        and not _OPEN_SIGNAL.search(text)
-    ):
-        score -= 4.0
-    if _host(hit.url) in {
-        "facebook.com",
-        "linkedin.com",
-        "instagram.com",
-        "x.com",
-        "youtube.com",
-    }:
-        score -= 12.0
-    return score
+def _candidate_links(page: EvidencePage, seed_url: str) -> list[tuple[str, str]]:
+    """Same-site, non-binary links as (url, label), in page order.
 
-
-def score_link(url: str, label: str, *, seed_url: str) -> float | None:
-    absolute = canonicalize_url(urljoin(seed_url, url))
-    if not absolute.startswith("https://"):
-        return None
-    if not _same_site(absolute, seed_url):
-        return None
-    text = f"{label} {urlparse(absolute).path.replace('-', ' ')}"
-    if _NEGATIVE.search(text):
-        return None
-    matches = len(_POSITIVE.findall(text))
-    return float(matches * 2) if matches else 0.25
-
-
-def _candidate_links(page: EvidencePage, seed_url: str) -> list[tuple[float, str]]:
+    No scoring: which link is worth following is a judgement and the model makes
+    it. This only removes what cannot be fetched.
+    """
     labelled: dict[str, str] = {url: url for url in page.links}
     for label, url in _MARKDOWN_LINK.findall(page.markdown):
         labelled[url] = label
-    ranked: list[tuple[float, str]] = []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for url, label in labelled.items():
         absolute = canonicalize_url(urljoin(page.url, url))
-        # Never spend a scrape on a binary. One run followed five .jpg links
-        # off an awards page — five paid Firecrawl calls, five errors, and they
-        # crowded out the real pages the bundle needed.
-        if _is_binary(absolute):
+        if absolute in seen or _is_binary(absolute):
             continue
-        score = score_link(absolute, label, seed_url=seed_url)
-        if score is not None:
-            ranked.append((score, absolute))
-    ranked.sort(key=lambda item: (-item[0], item[1]))
-    return ranked
+        if not absolute.startswith("https://") or not _same_site(absolute, seed_url):
+            continue
+        seen.add(absolute)
+        out.append((absolute, label.strip()[:120]))
+    return out
 
 
 def _low_quality(page: EvidencePage) -> bool:
@@ -180,11 +107,15 @@ async def resolve_evidence_bundle(
     runtime: WorkflowRuntime,
     record_event: Callable[..., Awaitable[None]],
     *,
-    max_depth: int = 3,
+    max_depth: int = 2,
     max_pages: int = 3,
     reserve_calls: int = 3,
+    choose_links: Callable[..., Awaitable[list[str]]] | None = None,
 ) -> EvidenceBundle:
-    """Fetch a seed and its highest-value same-domain links within hard caps."""
+    """Fetch a seed and the same-domain links the model picks, within hard caps.
+
+    When `choose_links` is absent or fails we follow nothing rather than guess.
+    """
     pages: list[EvidencePage] = []
     seen: set[str] = set()
     seed_url = canonicalize_url(hit.url)
@@ -252,12 +183,26 @@ async def resolve_evidence_bundle(
         )
         if depth >= max_depth:
             continue
-        for score, link in _candidate_links(page, seed_url):
-            if link not in seen and score >= 2:
+        candidates = [
+            item for item in _candidate_links(page, seed_url) if item[0] not in seen
+        ]
+        if not candidates or choose_links is None or depth > 0:
+            continue
+
+        # Only the seed gets a model call. If the model cannot choose, follow
+        # nothing: the seed page alone beats a keyword guess at which link matters.
+        followed: list[str] = []
+        try:
+            followed = await choose_links(page, candidates[:40])
+        except Exception as exc:  # noqa: BLE001
+            await record_event(
+                "select_links", node="research", url=page.url,
+                outcome="failed", detail=f"{type(exc).__name__}: {exc}"[:200],
+            )
+        followed = followed[: max_pages - len(pages)]
+
+        for link in followed:
+            if link not in seen:
                 queue.append((link, depth + 1))
 
     return EvidenceBundle(seed_url=seed_url, pages=tuple(pages))
-
-
-def has_open_signal(text: str) -> bool:
-    return bool(_OPEN_SIGNAL.search(text))

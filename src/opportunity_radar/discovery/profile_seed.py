@@ -65,7 +65,9 @@ def discovery_seed(path=None) -> str:
 _LABELLED = re.compile(r"^\s*[-*]\s*\**(?P<label>[^:*]+?)\**\s*:\s*(?P<value>.+?)\s*$", re.M)
 
 _MARKET_LABELS = ("primary markets", "markets served", "geograph", "operating regions")
-_SECTOR_LABELS = ("sector", "sub-sectors", "materials handled", "business model")
+# Sector lines only. "Materials handled" and "Business model" are not sectors,
+# and feeding PET/HDPE to the planner produced queries no award is named after.
+_SECTOR_LABELS = ("sector", "sub-sectors")
 
 
 def _labelled_values(section: str, wanted: tuple[str, ...]) -> list[str]:

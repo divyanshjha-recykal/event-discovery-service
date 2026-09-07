@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import date
 from functools import partial
+from itertools import zip_longest
 from typing import Annotated, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -25,7 +26,7 @@ from ..storage import (
 )
 from ..tracing import chat_model, stage_span, trace_handler
 from .actionability import assess_actionability, assess_completeness
-from .link_resolver import canonicalize_url, rank_search_hit, resolve_evidence_bundle
+from .link_resolver import canonicalize_url, resolve_evidence_bundle
 from .profile_seed import ProfileSectionMissing, discovery_seed, profile_facts
 from .providers import tavily_search
 from .state import (
@@ -36,27 +37,33 @@ from .state import (
     WorkflowRuntime,
 )
 
-# Raised from 4096. Under strict json_schema the model must emit a complete
-# conforming object, so a truncated reply is unparseable and the whole analysis
-# is lost — not degraded, lost. Two calls hit exactly 4096 and took the run down
-# with them. The point of the analysis is the full condition list, so the
-# ceiling has to leave room for it.
-MAX_OUTPUT_TOKENS = 8192
+# Per call, sized from that call's own schema. One global ceiling meant a call
+# that returns four integers was allowed 16,000 tokens, so when gemma looped it
+# generated 16,000 tokens of garbage and burned 300 seconds doing it — three
+# such calls cost one run 612 seconds. The ceiling must leave room for hidden
+# reasoning tokens too (glm-4.7-flash spends them before emitting anything), so
+# each is several times its schema's maximum rather than exactly it.
+TOKENS_PICK_LINKS = 1_024      # <=4 ints + one sentence
+TOKENS_SHORTLIST = 3_000       # <=8 picks, each an int + 300 chars
+TOKENS_PLAN = 3_000            # 10 queries with rationales
+TOKENS_ANALYZE = 16_000        # full condition lists; schema maxes near 10,400
 
-MAX_RESEARCH_CANDIDATES = 3
-MIN_CANDIDATE_SCORE = 3.0
+# Four: with three, ET Sustainability Awards was in the pool, was judged by the
+# model, and lost the last slot to a more sector-exact pick. Raise with budget.
+MAX_RESEARCH_CANDIDATES = 4
 
-# Raised from 12,000. This is the cap on how much of an evidence bundle the
-# analyser actually reads, and it decides how many eligibility conditions we can
-# possibly find. At 12k a multi-page bundle was being cut mid-page, so a
-# programme could be judged on the one condition that survived the truncation
-# while the conditions that would have disqualified us sat past the boundary.
-ANALYSIS_BUNDLE_CHARS = 32_000
+# Sized to hold every hit a run can produce (10 searches x 7 results), so
+# nothing is cut before the model sees it.
+SHORTLIST_POOL = 80
+MAX_LINKS_PER_PAGE = 2
 
-# Below this, a "page" is a bot-block stub, an error page or a redirect notice —
-# not something to spend a model call on. One 82-character fetch produced 4096
-# tokens of looping output because the model had nothing to describe but was
-# still required to satisfy the schema.
+# Per page, not per bundle. A single positional slice across the whole bundle
+# meant a long seed page consumed the entire window and the L1 pages we paid to
+# fetch were never read.
+ANALYSIS_PAGE_CHARS = 40_000
+
+# Below this a "page" is a bot-block stub, error page or redirect — not worth
+# a model call.
 MIN_BUNDLE_CHARS = 400
 
 MIN_CALLS_AFTER_RESEARCH = 3
@@ -66,7 +73,8 @@ class _PlannedQueryModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
-    intent: Literal["award", "grant", "event", "conference", "mixed"]
+    # No "grant": this business wants recognition, not funding.
+    intent: Literal["award", "event", "conference", "mixed"]
     geography: str
     target_year: int
     rationale: str
@@ -75,36 +83,62 @@ class _PlannedQueryModel(BaseModel):
 class _QueryPlanModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    queries: list[_PlannedQueryModel] = Field(min_length=3, max_length=5)
+    queries: list[_PlannedQueryModel] = Field(min_length=8, max_length=10)
 
 
+# Bounded so a MAXIMAL conforming answer still fits under TOKENS_ANALYZE.
+# The old limits permitted ~41,000 tokens against a 16,000 cap, so a legal reply
+# could truncate — and under strict json_schema a truncated reply is unparseable,
+# losing the whole analysis. Two bundles died that way in one run.
 class _CandidateModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    seed_url: str = Field(max_length=2_000)
-    source_url: str = Field(max_length=2_000)
-    target_title: str = Field(max_length=250)
+    seed_url: str = Field(max_length=500)
+    source_url: str = Field(max_length=500)
+    target_title: str = Field(max_length=200)
     category: Literal["award", "grant", "event", "conference"]
-    supporting_urls: list[Annotated[str, Field(max_length=2_000)]] = Field(
-        max_length=5
+    supporting_urls: list[Annotated[str, Field(max_length=500)]] = Field(
+        max_length=3
     )
     decision: Literal["pursue", "skip"]
-    reason: str = Field(max_length=600)
-    entry_eligibility: list[Annotated[str, Field(max_length=500)]] = Field(
+    reason: str = Field(max_length=400)
+    entry_eligibility: list[Annotated[str, Field(max_length=300)]] = Field(
         max_length=12
     )
-    judging_criteria: list[Annotated[str, Field(max_length=500)]] = Field(
+    judging_criteria: list[Annotated[str, Field(max_length=300)]] = Field(
         max_length=12
     )
     application_requirements: list[
-        Annotated[str, Field(max_length=500)]
+        Annotated[str, Field(max_length=300)]
     ] = Field(max_length=12)
 
 
 class _AnalysisModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    candidates: list[_CandidateModel] = Field(max_length=5)
+    candidates: list[_CandidateModel] = Field(max_length=3)
+
+
+class _ShortlistPickModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Index into the numbered list, not a URL — a model cannot hallucinate an
+    # index that resolves to the wrong page.
+    index: int
+    reason: str = Field(max_length=300)
+
+
+class _ShortlistModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    picks: list[_ShortlistPickModel] = Field(max_length=8)
+
+
+class _LinkChoiceModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    indexes: list[int] = Field(max_length=4)
+    reason: str = Field(max_length=300)
 
 
 def _response_text(content: object) -> str:
@@ -130,16 +164,42 @@ def _parse_json(content: object) -> dict:
     return value
 
 
-def _llm(runtime: WorkflowRuntime):
+def _llm(runtime: WorkflowRuntime, *, max_tokens: int, light: bool = False):
+    # The wall clock is only checked between calls, so one stalled request could
+    # sit for 120s x 3 retries. One retry at 90s keeps a stall survivable.
     kwargs: dict = {
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "timeout": 120,
-        "max_retries": 3,
+        "max_tokens": max_tokens,
+        "timeout": 90,
+        "max_retries": 1,
     }
+    # Selection calls return a few indices and a sentence; extended reasoning on
+    # them is what exhausted the output budget, so ask for the least available.
+    if light:
+        kwargs["extra_body"] = {"reasoning": {"effort": "low", "exclude": True}}
     temperature = discovery_temperature()
     if temperature is not None:
         kwargs["temperature"] = temperature
     return chat_model(runtime.model, **kwargs)
+
+
+async def _structured(runtime: WorkflowRuntime, model_cls, name: str,
+                      system: str, user: str, *, max_tokens: int,
+                      light: bool = False):
+    """One strict-JSON model call, validated into `model_cls`."""
+    response = await asyncio.to_thread(
+        _llm(runtime, max_tokens=max_tokens, light=light).invoke,
+        [SystemMessage(system), HumanMessage(user)],
+        config={"callbacks": [trace_handler()]},
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": name,
+                "strict": True,
+                "schema": model_cls.model_json_schema(),
+            },
+        },
+    )
+    return model_cls.model_validate(_parse_json(response.content))
 
 
 async def _record(
@@ -201,33 +261,22 @@ def _fallback_queries(today: date) -> list[PlannedQuery]:
             "Planning must not fall back to invented geography or sector."
         )
 
-    next_year = today.year + 1
+    # One query per stated sector, always in the primary market, never grants
+    # and never a secondary market — this ran once and spent a whole run on
+    # Bhutan, Mauritius and funding, none of which the LLM plan would have done.
     primary = geographies[0]
-    # The two broadest sector terms; the material-level ones (PET, HDPE) are
-    # too narrow to anchor a search for awards.
-    lead_sectors = [s for s in sectors if len(s.split()) > 1][:2] or sectors[:2]
-
-    plans = [
+    years = (today.year, today.year + 1)
+    return [
         PlannedQuery(
-            f"{lead_sectors[0]} awards {next_year} call for entries {primary}",
-            "award", primary, next_year,
-            f"Core recognition in {lead_sectors[0]}, the profile's stated sector",
-        ),
-        PlannedQuery(
-            f"{lead_sectors[-1]} grants {next_year} applications open {primary}",
-            "grant", primary, next_year,
-            f"Funding relevant to {lead_sectors[-1]}",
-        ),
-    ]
-    for geography in geographies[1:3]:
-        plans.append(
-            PlannedQuery(
-                f"{lead_sectors[0]} awards {next_year} nominations open {geography}",
-                "award", geography, next_year,
-                f"{geography} is a market the profile states this business serves",
-            )
+            f"{sector} awards {years[index % 2]} call for entries {primary}",
+            "award",
+            primary,
+            years[index % 2],
+            f"Fallback plan: {sector} is a sector the profile states, "
+            f"searched in {primary}",
         )
-    return plans
+        for index, sector in enumerate(sectors[:4])
+    ]
 
 
 async def plan_queries_node(
@@ -236,6 +285,7 @@ async def plan_queries_node(
     runtime = services
     today = date.fromisoformat(state["as_of_date"])
     memory = state.get("memory") or await _memory(runtime)
+    fallback_detail = ""
 
     if state["supplied_queries"]:
         planned = [
@@ -255,45 +305,49 @@ async def plan_queries_node(
         geographies = ", ".join(facts["geographies"]) or "(profile states none)"
         sectors = ", ".join(facts["sectors"]) or "(profile states none)"
 
-        prompt = f"""Today is {today.isoformat()}.
-Plan 3-5 non-overlapping web searches for currently actionable awards, grants,
-events or conferences this business could enter.
+        primary = facts["geographies"][0] if facts["geographies"] else "global"
+        prompt = f"""Today is {today.isoformat()}. Find awards, prizes and
+recognition programmes this business could enter. Recognition, not funding —
+never search for grants, funding or fellowships.
 
-GEOGRAPHY — search only these markets, taken from the business profile:
-{geographies}
-Do not search any other region. If a region is not listed above, this business
-does not operate there and an award there is not actionable for it.
+Sectors from the profile: {sectors}
+Primary market: {primary}
 
-SECTORS — taken from the business profile:
-{sectors}
+Write 10 searches. Seven or eight must name {primary}; the rest name no country.
 
-WRITE QUERIES THAT FIND ENTRY PAGES, NOT ARTICLES ABOUT THE SUBJECT.
-The single most common failure is a query that reads like a research topic and
-returns directories, listicles, blog posts and news. You want the page where a
-programme invites entries.
+KEEP EACH QUERY SHORT — three or four content words. This is the most important
+rule here. A search engine returns only pages matching every word you give it,
+so each extra word narrows the results. A short query returns a wide, varied
+set; a long one returns the same small set of heavily marketed pages every run.
 
-- Include the words an entry page uses and an article does not:
-  "call for entries", "nominations open", "applications open", "how to apply",
-  "entry deadline", "submit nomination".
-- Name a sector and a year: "<sector> award {today.year + 1} call for entries <market>".
-- Do not write topic queries. "<sector> <sector> grants <market>" reads like a
-  research question and returns aggregator sites; "<sector> award
-  {today.year + 1} nominations open <market>" reads like an entry page and
-  returns the award. Substitute a real sector and a real market from the lists
-  above — never a region that is not listed there.
-- Avoid words that pull directories and roundups: "list of", "top", "best",
-  "guide", "opportunities", "funding opportunities", "grants for".
-- One query may target a specific programme by name if the memory below shows
-  this business has entered or won something similar before.
+  good:       sustainability awards {primary} {today.year}
+  good:       {primary} circular economy awards
+  good:       waste management industry awards {primary}
+  too narrow: circular economy waste management awards {primary} {today.year} call for entries
 
-TIMING — today is {today.isoformat()}. A cycle for the current year has usually
-closed by now, so prefer {today.year + 1} cycles and programmes currently open.
-Never search a past year.
+Do not add entry phrases — call for entries, nominations open, entry deadline.
+Those words sit in page body text, not titles, and they cut recall for no gain.
 
-This is replanning attempt {state['replan_count']}. Earlier searches or evidence:
-{[hit.query for hit in state.get('search_hits', [])][-8:]}
+COVER DIFFERENT GROUND WITH EACH ONE. Ten wordings of a single idea is a wasted
+plan. Vary deliberately:
+- the field named: the profile's sectors, and also the broader fields they sit
+  inside — sustainability, environment, climate, ESG, innovation, technology
+- whether a year appears at all. Use {today.year} or {today.year + 1} in only
+  some of them, never a past year
+- the kind of recognition: awards, prize, honours, rankings, top companies
+- the kind of body that runs it: industry association, chamber of commerce,
+  government, business publication. These run most awards in any market
+- the company stage: startup, emerging company, SME
 
-Business memory:
+Rules:
+- No quotation marks.
+- No unexplained acronyms; they match company names instead.
+- Never name a product or hardware category. Awards are named after fields,
+  never after the equipment a company sells.
+- Do not copy a programme name out of the profile below. Searching for an award
+  we already know about discovers nothing.
+
+BUSINESS:
 {memory}
 """
         try:
@@ -301,25 +355,14 @@ Business memory:
             if refusal:
                 raise RuntimeError(refusal)
             runtime.budget.consume("plan")
-            response = await asyncio.to_thread(
-                _llm(runtime).invoke,
-                [
-                    SystemMessage(
-                        "Return a precise search plan as JSON matching the supplied schema."
-                    ),
-                    HumanMessage(prompt),
-                ],
-                config={"callbacks": [trace_handler()]},
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "opportunity_query_plan",
-                        "strict": True,
-                        "schema": _QueryPlanModel.model_json_schema(),
-                    },
-                },
+            parsed = await _structured(
+                runtime,
+                _QueryPlanModel,
+                "opportunity_query_plan",
+                "Return a precise search plan as JSON matching the supplied schema.",
+                prompt,
+                max_tokens=TOKENS_PLAN,
             )
-            parsed = _QueryPlanModel.model_validate(_parse_json(response.content))
             planned = [
                 PlannedQuery(
                     item.query,
@@ -332,15 +375,17 @@ Business memory:
             ]
         except Exception as exc:  # noqa: BLE001
             planned = _fallback_queries(today)
+            fallback_detail = f"{type(exc).__name__}: {exc}"[:300]
             runtime.warnings.append(
-                f"query planning fell back to deterministic plan: {type(exc).__name__}: {exc}"
+                f"query planning fell back to deterministic plan: {fallback_detail}"
             )
 
     await _record(
         runtime,
         "plan",
         node="plan",
-        outcome="ok",
+        outcome="fallback" if fallback_detail else "ok",
+        detail=fallback_detail,
         queries=[
             {
                 "query": item.query,
@@ -355,104 +400,269 @@ Business memory:
     return {"memory": memory, "planned_queries": planned}
 
 
+_SHORTLIST_SYSTEM = (
+    "You choose which web search results are worth fetching. "
+    "Return JSON matching the supplied schema."
+)
+
+
+async def _shortlist(
+    ranked: list, memory: str, today: date, runtime: WorkflowRuntime, want: int
+) -> list[tuple[object, str]]:
+    """Model picks which hits to research. Raises so the caller can fall back."""
+    pool = ranked[:SHORTLIST_POOL]
+    listing = "\n".join(
+        f"[{index}] {hit.title}\n     {hit.url}\n     {hit.snippet[:280]}"
+        for index, hit in enumerate(pool)
+    )
+    prompt = f"""Today is {today.isoformat()}. Below are {len(pool)} web search
+results. Pick {want} to research.
+
+You are looking for pages belonging to a recognition programme this business
+could enter. A programme's landing page, its categories page, its entry or
+eligibility page are all good seeds — we follow links from whatever you pick, so
+a landing page is not worse than a deep one.
+
+ONE QUESTION DECIDES EACH RESULT: does the organisation behind this page RUN the
+programme, or is it writing about someone else's?
+
+  Runs it -> pick it. Newspapers, magazines, industry associations, chambers of
+  commerce and government bodies run a large share of all awards, and they host
+  those awards on their own domain. A business newspaper's awards section is
+  that programme's own site. Judge the organisation and the programme, not the
+  domain name.
+
+  Writing about someone else's -> skip. A dated article reporting who won, or a
+  roundup listing many different programmes, is not a programme.
+
+Also skip: past or closed editions; programmes only for individuals, students or
+researchers; and grants, funding or fellowships — this business wants
+recognition, not money.
+
+For each pick, the reason must say who the programme is open to, in a few words,
+from what the snippet actually shows. If it is limited to a country this business
+does not operate in, do not pick it however well the sector matches.
+
+Spread your picks. Do not take {want} pages from one organisation, and do not
+take {want} of the same kind of award.
+
+You have only the title, URL and snippet. Where the snippet is thin, prefer a
+programme that clearly exists over a page that merely uses the right words.
+
+BUSINESS:
+{memory}
+
+RESULTS:
+{listing}
+"""
+    parsed = await _structured(
+        runtime, _ShortlistModel, "search_shortlist", _SHORTLIST_SYSTEM, prompt,
+        max_tokens=TOKENS_SHORTLIST, light=True,
+    )
+    chosen: list[tuple[object, str]] = []
+    seen: set[int] = set()
+    for pick in parsed.picks:
+        if 0 <= pick.index < len(pool) and pick.index not in seen:
+            seen.add(pick.index)
+            chosen.append((pool[pick.index], pick.reason))
+    return chosen
+
+
+def _link_chooser(runtime: WorkflowRuntime, today: date):
+    """An async callable the traversal uses to pick which links to follow."""
+
+    async def choose(page, candidates: list[tuple[float, str, str]]) -> list[str]:
+        refusal = runtime.budget.refusal("select_links")
+        if refusal:
+            return []
+        listing = "\n".join(
+            f"[{index}] {label or '(no label)'} — {url}"
+            for index, (url, label) in enumerate(candidates)
+        )
+        prompt = f"""Today is {today.isoformat()}. While researching a
+recognition programme you fetched this page:
+{page.url}
+{page.title}
+
+Below are links on the same site. Pick at most {MAX_LINKS_PER_PAGE} that most
+likely state entry eligibility, who can enter, entry requirements, categories,
+fees, or the entry deadline. Prefer a specific entry, eligibility or categories
+page over a general one. Skip winners, past editions, news, sponsors, contact,
+login and social pages. Return an empty list if none are worth fetching.
+
+LINKS:
+{listing}
+"""
+        runtime.budget.consume("select_links")
+        parsed = await _structured(
+            runtime,
+            _LinkChoiceModel,
+            "link_selection",
+            "Pick which links to fetch. Return JSON matching the supplied schema.",
+            prompt,
+            max_tokens=TOKENS_PICK_LINKS, light=True,
+        )
+        picked = [
+            candidates[index][0]
+            for index in parsed.indexes[:MAX_LINKS_PER_PAGE]
+            if 0 <= index < len(candidates)
+        ]
+        await _record(
+            runtime, "select_links", node="research", url=page.url,
+            outcome="ok", picked=picked, reason=parsed.reason,
+            considered=len(candidates),
+        )
+        return picked
+
+    return choose
+
+
 async def research_node(
     state: DiscoveryState, *, services: WorkflowRuntime
 ) -> dict:
     runtime = services
+    today = date.fromisoformat(state["as_of_date"])
 
     async def record_research(tool: str, **fields: object) -> None:
         await _record(runtime, tool, **fields)
 
     hits = list(state.get("search_hits", []))
     seen_queries = {hit.query for hit in hits}
-    for planned in state["planned_queries"]:
-        if planned.query in seen_queries:
-            continue
-        refusal = runtime.budget.refusal("search")
-        if refusal:
-            break
-        runtime.budget.consume("search")
+
+    async def run_queries(planned_list: list[PlannedQuery], round_label: str) -> None:
+        for planned in planned_list:
+            if planned.query in seen_queries:
+                continue
+            refusal = runtime.budget.refusal("search")
+            if refusal:
+                break
+            runtime.budget.consume("search")
+            seen_queries.add(planned.query)
+            try:
+                found = await tavily_search(planned.query, dry_run=runtime.dry_run)
+                hits.extend(found)
+                await _record(
+                    runtime, "search", node="research", query=planned.query,
+                    outcome="ok" if found else "empty",
+                    round=round_label, geography=planned.geography,
+                    rationale=planned.rationale,
+                    results=[
+                        {"title": i.title, "url": i.url, "snippet": i.snippet}
+                        for i in found
+                    ],
+                )
+            except Exception as exc:  # noqa: BLE001
+                runtime.failures.append(
+                    f"search {planned.query!r}: {type(exc).__name__}"
+                )
+                await _record(
+                    runtime, "search", node="research", query=planned.query,
+                    outcome="failed", round=round_label,
+                    detail=f"{type(exc).__name__}: {exc}"[:300],
+                )
+
+    await run_queries(state["planned_queries"], "broad")
+
+    # Order is the order the search engine returned, round-robined across
+    # queries so no single query dominates. There is no keyword scoring here:
+    # a regex tuned for award-marketing words scored "Sustainability Leadership
+    # Awards" at zero and dropped it from two separate runs.
+    per_query: dict[str, list] = {}
+    for hit in hits:
+        per_query.setdefault(hit.query, []).append(hit)
+
+    existing_seeds = {bundle.seed_url for bundle in state.get("evidence_bundles", [])}
+    ordered: list = []
+    seen_urls: set[str] = set()
+    for row in zip_longest(*per_query.values()):
+        for hit in row:
+            if hit is None:
+                continue
+            url = canonicalize_url(hit.url)
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            ordered.append(type(hit)(hit.title, url, hit.snippet, hit.query, 0.0))
+
+    ranked = [hit for hit in ordered if hit.url not in existing_seeds]
+
+    # The model chooses what to research; the keyword score only orders the pool
+    # it sees. Ranking is the fallback, never the gate.
+    picks: list[tuple[object, str]] = []
+    if ranked and not runtime.dry_run and runtime.budget.refusal("shortlist") is None:
         try:
-            found = await tavily_search(
-                planned.query, dry_run=runtime.dry_run
+            runtime.budget.consume("shortlist")
+            picks = await _shortlist(
+                ranked, state["memory"], today, runtime, MAX_RESEARCH_CANDIDATES
             )
-            hits.extend(found)
             await _record(
-                runtime,
-                "search",
-                node="research",
-                query=planned.query,
-                outcome="ok" if found else "empty",
-                results=[
-                    {"title": item.title, "url": item.url, "snippet": item.snippet}
-                    for item in found
+                runtime, "shortlist", node="research", outcome="ok",
+                considered=len(ranked),
+                picked=[
+                    {"url": hit.url, "title": hit.title, "reason": reason}
+                    for hit, reason in picks
                 ],
             )
         except Exception as exc:  # noqa: BLE001
-            runtime.failures.append(f"search {planned.query!r}: {type(exc).__name__}")
+            detail = f"{type(exc).__name__}: {exc}"[:300]
+            runtime.warnings.append(f"shortlist fell back to ranking: {detail}")
             await _record(
-                runtime,
-                "search",
-                node="research",
-                query=planned.query,
-                outcome="failed",
-                detail=f"{type(exc).__name__}: {exc}"[:300],
+                runtime, "shortlist", node="research", outcome="failed",
+                considered=len(ranked), detail=detail,
             )
+    if not picks:
+        picks = [(hit, "search-engine order (shortlist unavailable)") for hit in ranked]
 
-    current_year = date.fromisoformat(state["as_of_date"]).year
-    by_url = {}
-    for hit in hits:
-        canonical_url = canonicalize_url(hit.url)
-        scored = type(hit)(
-            hit.title,
-            canonical_url,
-            hit.snippet,
-            hit.query,
-            rank_search_hit(hit, current_year=current_year),
-        )
-        previous = by_url.get(canonical_url)
-        if previous is None or scored.score > previous.score:
-            by_url[canonical_url] = scored
-    ranked = sorted(by_url.values(), key=lambda item: (-item.score, item.url))
-
-    existing_seeds = {bundle.seed_url for bundle in state.get("evidence_bundles", [])}
     bundles = list(state.get("evidence_bundles", []))
+    choose_links = None if runtime.dry_run else _link_chooser(runtime, today)
     added = 0
-    for hit in ranked:
+    for hit, reason in picks:
         if hit.url in existing_seeds or added >= MAX_RESEARCH_CANDIDATES:
-            continue
-        if hit.score < MIN_CANDIDATE_SCORE:
             continue
         if runtime.budget.remaining <= MIN_CALLS_AFTER_RESEARCH:
             break
-        bundle = await resolve_evidence_bundle(hit, runtime, record_research)
+        bundle = await resolve_evidence_bundle(
+            hit, runtime, record_research, choose_links=choose_links
+        )
         if bundle.pages:
             bundles.append(bundle)
             existing_seeds.add(hit.url)
             added += 1
+        _ = reason
 
-    return {"search_hits": list(by_url.values()), "evidence_bundles": bundles}
+    return {"search_hits": ordered, "evidence_bundles": bundles}
 
 
 def _bundle_prompt(bundle: EvidenceBundle, today: str, memory: str) -> str:
-    evidence = bundle.combined_text[:ANALYSIS_BUNDLE_CHARS]
-    return f"""Today is {today}. Analyze these researched official-page bundles.
-Be concise: return at most five entities, short reasons, and only criteria
-explicitly supported by the evidence.
-Identify distinct opportunity entities; an event and an award on one site are
-different entities. Pursue only a currently open/currently actionable entity.
-Skip entities whose explicit entry eligibility excludes this business (for
-example student-only or individual-only programmes). Do not skip merely because
-some category is a poor fit when another category provides a realistic route.
-Prefer the umbrella award programme over one category/track when they share one
-entry process. Emit a separate track only when it is independently entered and
-has materially different entry eligibility. For every seed bundle, emit at
-least one decision; use a skip decision when it contains no relevant entity.
-Use a specific application/guidelines page as source_url when available.
-Separate judging criteria and application-document requirements from entry
-eligibility. Never treat a past edition as a current opportunity.
+    evidence = bundle.bounded_text(ANALYSIS_PAGE_CHARS)
+    return f"""Today is {today}. These pages were fetched from one site while
+researching recognition programmes. Identify the distinct opportunities on it.
 
-BUSINESS MEMORY:
+An event and an award on the same site are different entities. Prefer the
+umbrella programme over one of its categories when they share an entry process;
+emit a separate track only when it is entered independently and has materially
+different entry eligibility.
+
+Decide pursue or skip for each. Pursue only a programme that is currently open
+or currently actionable. Skip: past editions; closed entry windows; programmes
+whose stated eligibility excludes a company (student-only, individual-only,
+researcher-only); and grant, funding or fellowship programmes, because this
+business wants recognition, not money. Do not skip because one category fits
+poorly when another category is a realistic route.
+
+Emit at least one decision per seed bundle — use skip when the site holds no
+relevant opportunity.
+
+ENTRY ELIGIBILITY is the heart of this. List every stated condition an entrant
+must satisfy, each as its own item, in the words the page uses. Do not
+summarise them into one line and do not invent conditions the page does not
+state. Keep judging criteria (what the entry is scored on) and application
+requirements (what must be submitted) in their own separate lists.
+
+Set source_url to the most specific entry, eligibility or guidelines page
+available among the pages below.
+
+BUSINESS:
 {memory}
 
 {evidence}
@@ -465,31 +675,14 @@ async def _analyze_bundle(
     runtime: WorkflowRuntime,
 ) -> list[CandidateVerdict]:
     runtime.budget.consume("analyze")
-    response = await asyncio.to_thread(
-        _llm(runtime).invoke,
-        [
-            SystemMessage(
-                "Return candidate decisions as strict JSON matching the supplied schema."
-            ),
-            HumanMessage(
-                _bundle_prompt(
-                    bundle,
-                    state["as_of_date"],
-                    state["memory"],
-                )
-            ),
-        ],
-        config={"callbacks": [trace_handler()]},
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": "opportunity_candidate_analysis",
-                "strict": True,
-                "schema": _AnalysisModel.model_json_schema(),
-            },
-        },
+    parsed = await _structured(
+        runtime,
+        _AnalysisModel,
+        "opportunity_candidate_analysis",
+        "Return candidate decisions as strict JSON matching the supplied schema.",
+        _bundle_prompt(bundle, state["as_of_date"], state["memory"]),
+        max_tokens=TOKENS_ANALYZE,
     )
-    parsed = _AnalysisModel.model_validate(_parse_json(response.content))
     valid_urls = set(bundle.source_urls)
     candidates: list[CandidateVerdict] = []
     for item in parsed.candidates:
@@ -847,12 +1040,30 @@ async def finalize_node(
     return {"rejected": rejected, "summary": summary}
 
 
+def _traced_node(name: str, fn, runtime: WorkflowRuntime):
+    """Wrap a node so its LLM calls nest under one span named for the node."""
+
+    async def run(state: DiscoveryState) -> dict:
+        with stage_span(
+            f"discovery.{name}",
+            budget_spent=runtime.budget.spent,
+            budget_remaining=runtime.budget.remaining,
+        ) as span:
+            result = await fn(state, services=runtime)
+            span.update(metadata={"budget_after": runtime.budget.spent})
+            return result
+
+    return run
+
+
 def build_discovery_graph(runtime: WorkflowRuntime):
     builder = StateGraph(DiscoveryState)
-    builder.add_node("plan_queries", partial(plan_queries_node, services=runtime))
-    builder.add_node("research", partial(research_node, services=runtime))
-    builder.add_node("analyze", partial(analyze_node, services=runtime))
-    builder.add_node("finalize", partial(finalize_node, services=runtime))
+    builder.add_node(
+        "plan_queries", _traced_node("plan_queries", plan_queries_node, runtime)
+    )
+    builder.add_node("research", _traced_node("research", research_node, runtime))
+    builder.add_node("analyze", _traced_node("analyze", analyze_node, runtime))
+    builder.add_node("finalize", _traced_node("finalize", finalize_node, runtime))
     builder.add_edge(START, "plan_queries")
     builder.add_edge("plan_queries", "research")
     builder.add_edge("research", "analyze")
