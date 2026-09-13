@@ -1046,7 +1046,7 @@ def _traced_node(name: str, fn, runtime: WorkflowRuntime):
     async def run(state: DiscoveryState) -> dict:
         with stage_span(
             f"discovery.{name}",
-            budget_spent=runtime.budget.spent,
+            budget_spent=runtime.budget.spent,  
             budget_remaining=runtime.budget.remaining,
         ) as span:
             result = await fn(state, services=runtime)
