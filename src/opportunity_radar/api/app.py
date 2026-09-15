@@ -23,7 +23,7 @@ from uuid import uuid4
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..config import MongoConfig
 from ..discovery import RunBudget, run_discovery
@@ -129,53 +129,162 @@ async def state() -> dict:
         "programs": programs,
         "failures": failures,
         "runs": runs,
-        "skipped": await _skipped_pages(),
     }
 
 
-async def _skipped_pages() -> list[dict]:
-    """Pages the agent fetched and then chose not to pursue.
+def _read_journey(journey: list[dict]) -> dict[str, list[dict]]:
+    """Split one run's journey into what it saved, set aside, and failed on.
 
-    Derived from the run journeys rather than stored separately: a skip is the
-    absence of a later extract call, so there is nothing to write down at the
-    time. Extraction failures are excluded — those are reported on their own,
-    and this list is specifically the agent's judgement calls.
+    Derived from the journey rather than from `discovery_run_id`, which is a
+    single field on an upserted record: when a later run re-finds the same
+    opportunity that field is overwritten, and an earlier run's page would
+    silently lose the thing it found. A journey is immutable once written.
     """
+    saved: list[str] = []
+    set_aside: list[dict] = []
+    failures: list[dict] = []
     scraped: dict[str, dict] = {}
+    unreachable: dict[str, dict] = {}
     reached_extraction: set[str] = set()
-    decided: dict[str, dict] = {}
 
-    async for run in _db[RUNS].find({}, {"journey": 1, "run_id": 1, "started_at": 1}):
-        for event in run.get("journey", []):
-            url = event.get("url")
-            if not url:
-                continue
-            if event["tool"] == "scrape" and event.get("outcome") == "ok":
-                scraped[url] = {
+    for event in journey:
+        url, tool, outcome = event.get("url"), event.get("tool"), event.get("outcome")
+        if not url:
+            continue
+        if tool == "save_opportunity" and outcome == "ok":
+            saved.append(url)
+        elif tool == "scrape" and outcome == "ok":
+            scraped[url] = event
+            unreachable.pop(url, None)
+        elif tool == "scrape":
+            # A page that would not load is a gap in the evidence, not a
+            # judgement about the programme. It has to stay visible.
+            unreachable.setdefault(url, event)
+        elif tool == "extract":
+            reached_extraction.add(url)
+            if outcome == "failed":
+                failures.append({
                     "url": url,
-                    "run_id": run.get("run_id"),
-                    "when": run.get("started_at"),
-                    "bare_domain": event.get("bare_domain", False),
-                    "chars": event.get("chars"),
-                }
-            elif event["tool"] == "extract":
-                reached_extraction.add(url)
-            elif event["tool"] in ("skip", "actionability"):
-                decided[url] = {
-                    "url": url,
-                    "run_id": run.get("run_id"),
-                    "when": run.get("started_at"),
-                    "reason": event.get("reason") or "not taken forward",
-                    "outcome": event.get("outcome") or "skipped",
                     "title": event.get("title"),
-                }
+                    "reason": event.get("reason") or "extraction failed",
+                    "detail": event.get("detail"),
+                })
+        elif tool in ("skip", "actionability"):
+            set_aside.append({
+                "url": url,
+                "title": event.get("title"),
+                "outcome": outcome or "skipped",
+                "reason": event.get("reason") or "not taken forward",
+            })
 
-    implicit = {
-        key: value
-        for key, value in scraped.items()
-        if key not in reached_extraction and key not in decided
+    decided = {row["url"] for row in set_aside} | reached_extraction
+
+    for url, event in unreachable.items():
+        if url in decided:
+            continue
+        set_aside.append({
+            "url": url,
+            "title": None,
+            "outcome": "could not fetch",
+            "reason": event.get("detail") or (
+                "the page returned too little content to use — usually a bot block, "
+                "an error page or a redirect"
+                if event.get("outcome") == "insufficient"
+                else "the fetch failed"
+            ),
+        })
+
+    # A page fetched but never analysed into a candidate — no explicit decision
+    # was ever recorded for it, so it would otherwise vanish from the account.
+    for url, event in scraped.items():
+        if url not in decided:
+            set_aside.append({
+                "url": url,
+                "title": None,
+                "outcome": "not pursued",
+                "reason": (
+                    f"fetched ({event.get('chars')} chars) but never became a candidate"
+                ),
+            })
+
+    return {"saved": saved, "set_aside": set_aside, "failures": failures}
+
+
+# Far above any reachable journey length (budget caps at 200 tool calls), so a
+# poll never silently truncates.
+_EVENT_PAGE = 2_000
+
+
+@app.get("/api/runs/{run_id}/events")
+async def get_run_events(run_id: str, after: int = 0) -> dict:
+    """Run metadata plus only the journey rows after `after`.
+
+    The whole-document poll this replaces re-sent every search snippet every
+    1.5 seconds — about 6 MB over a 90-second run, growing with journey length.
+    Journey rows are append-only and `seq` is their 1-based position, so a
+    positional slice is exactly "everything newer than what the client holds".
+    """
+    doc = await _db[RUNS].find_one(
+        {"run_id": run_id},
+        {
+            "_id": 0,
+            "journey": {"$slice": [max(after, 0), _EVENT_PAGE]},
+            "run_id": 1, "model": 1, "status": 1, "started_at": 1, "finished_at": 1,
+            "budget": 1, "counts": 1, "summary": 1, "trace_url": 1, "thinking": 1,
+            "queries": 1, "warnings": 1, "failures": 1,
+            "eligibility_done": 1, "eligibility_evaluated": 1, "eligibility_failures": 1,
+        },
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"no run {run_id}")
+
+    events = doc.pop("journey", None) or []
+    return {**_jsonable(doc), "events": [_jsonable(e) for e in events]}
+
+
+@app.delete("/api/runs/{run_id}")
+async def delete_run(run_id: str) -> dict:
+    """Remove one run's record and its journey.
+
+    Deliberately does not touch `opportunities` or `programs`: a record is
+    upserted on its own identity and may have been confirmed by later runs, so
+    deleting a run must not delete findings that outlived it.
+    """
+    if run_id in _ACTIVE:
+        raise HTTPException(
+            status_code=409,
+            detail="that run is still in flight — stop it before deleting it",
+        )
+    result = await _db[RUNS].delete_one({"run_id": run_id})
+    if not result.deleted_count:
+        raise HTTPException(status_code=404, detail=f"no run {run_id}")
+    return {"run_id": run_id, "deleted": True}
+
+
+@app.get("/api/runs/{run_id}/results")
+async def get_run_results(run_id: str) -> dict:
+    """What one run actually produced, scoped to that run alone."""
+    run = await _db[RUNS].find_one({"run_id": run_id}, {"journey": 1})
+    if not run:
+        raise HTTPException(status_code=404, detail=f"no run {run_id}")
+
+    read = _read_journey(run.get("journey") or [])
+    ordered = list(dict.fromkeys(read["saved"]))
+
+    documents: dict[str, dict] = {}
+    if ordered:
+        async for doc in _db[OPPORTUNITIES].find({"source_url": {"$in": ordered}}):
+            documents[doc["source_url"]] = _jsonable(doc)
+
+    return {
+        "run_id": run_id,
+        "saved": [documents[url] for url in ordered if url in documents],
+        # Saved by this run but no longer in storage — the database was cleared
+        # after the run. Reported rather than silently dropped.
+        "missing": [url for url in ordered if url not in documents],
+        "set_aside": read["set_aside"],
+        "failures": read["failures"],
     }
-    return [_jsonable(v) for v in [*decided.values(), *implicit.values()]]
 
 
 # Budgets of runs currently in flight, so /stop can cancel one. A cancelled
@@ -193,11 +302,45 @@ async def stop_run(run_id: str) -> dict:
     return {"run_id": run_id, "status": "stopping"}
 
 
-class PipelineRequest(BaseModel):
+class RunConfig(BaseModel):
+    """Everything the configurator sets. Each cap maps to a `RunBudget` field.
+
+    All five were previously fixed at their defaults because only `tool_calls`
+    was passed through, so `max_llm_calls` silently capped every run at 16
+    however high the headline budget was set.
+    """
+
     model: str | None = None
-    budget: int = Field(default=40, ge=1, le=80)
+    budget: int = Field(default=40, ge=1, le=200)
+    max_searches: int = Field(default=12, ge=1, le=60)
+    max_scrapes: int = Field(default=14, ge=1, le=60)
+    max_llm_calls: int = Field(default=16, ge=1, le=60)
+    wall_clock_seconds: int = Field(default=900, ge=30, le=3600)
     queries: list[str] = Field(default_factory=list)
     dry_run: bool = False
+
+    @field_validator("model")
+    @classmethod
+    def _blank_is_none(cls, value: str | None) -> str | None:
+        """An empty model box means "use OPENROUTER_MODEL", not a model named ''."""
+        return (value or "").strip() or None
+
+    @field_validator("queries")
+    @classmethod
+    def _drop_blank_queries(cls, value: list[str]) -> list[str]:
+        return [q.strip() for q in value if q and q.strip()]
+
+    def to_budget(self) -> RunBudget:
+        return RunBudget(
+            tool_calls=self.budget,
+            max_searches=self.max_searches,
+            max_scrapes=self.max_scrapes,
+            max_llm_calls=self.max_llm_calls,
+            wall_clock_seconds=self.wall_clock_seconds,
+        )
+
+
+PipelineRequest = RunConfig
 
 
 @app.post("/api/pipeline")
@@ -209,7 +352,7 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
     criteria and no verdict yet, so re-running is cheap and idempotent.
     """
     run_id = uuid4().hex
-    budget = RunBudget(tool_calls=request.budget)
+    budget = request.to_budget()
     profile = load_business_profile()
 
     async def _go() -> None:
@@ -284,11 +427,7 @@ async def get_run_detail(run_id: str) -> dict:
     return _jsonable(run)
 
 
-class RunRequest(BaseModel):
-    model: str | None = None
-    budget: int = Field(default=40, ge=1, le=80)
-    queries: list[str] = Field(default_factory=list)
-    dry_run: bool = False
+RunRequest = RunConfig
 
 
 @app.post("/api/runs")
@@ -300,7 +439,7 @@ async def start_discovery(request: RunRequest, background: BackgroundTasks) -> d
     for the ninety seconds a run takes.
     """
     run_id = uuid4().hex
-    budget = RunBudget(tool_calls=request.budget)
+    budget = request.to_budget()
 
     async def _go() -> None:
         _ACTIVE[run_id] = budget
@@ -392,4 +531,12 @@ if STATIC_DIR.is_dir():
 
     @app.get("/")
     async def index() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html")
+
+    # Client-side routes (/run/<id>) must survive a refresh. Declared last, so
+    # every /api route above still wins — FastAPI matches in definition order.
+    @app.get("/{full_path:path}")
+    async def spa(full_path: str) -> FileResponse:
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail=f"no route /{full_path}")
         return FileResponse(STATIC_DIR / "index.html")

@@ -63,13 +63,22 @@ async def start_run(
     )
 
 
-async def append_event(db: AsyncDatabase, run_id: str, event: dict[str, Any]) -> None:
+async def append_event(
+    db: AsyncDatabase,
+    run_id: str,
+    event: dict[str, Any],
+    budget: dict[str, Any] | None = None,
+) -> None:
     """Append one tool call to the journey, as it happens.
 
     Written during the run rather than at the end so a run that crashes still
-    leaves a readable trail of how far it got.
+    leaves a readable trail of how far it got. `budget` carries the live
+    counters, without which the UI could only show them once the run finished.
     """
-    await db[RUNS].update_one({"run_id": run_id}, {"$push": {"journey": event}})
+    update: dict[str, Any] = {"$push": {"journey": event}}
+    if budget:
+        update["$set"] = {f"budget.{key}": value for key, value in budget.items()}
+    await db[RUNS].update_one({"run_id": run_id}, update)
 
 
 async def finish_run(
@@ -81,6 +90,8 @@ async def finish_run(
     budget: dict,
     counts: dict,
     thinking: list[str],
+    warnings: list[str] | None = None,
+    failures: list[str] | None = None,
 ) -> dict | None:
     return await db[RUNS].find_one_and_update(
         {"run_id": run_id},
@@ -93,6 +104,11 @@ async def finish_run(
                 "budget": budget,
                 "counts": counts,
                 "thinking": thinking,
+                # Quality warnings and provider failures were computed on every
+                # run and never written down, so nothing downstream could show
+                # that a stored record came with caveats.
+                "warnings": warnings or [],
+                "failures": failures or [],
             }
         },
         return_document=ReturnDocument.AFTER,

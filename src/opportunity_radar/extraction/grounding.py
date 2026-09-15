@@ -104,13 +104,6 @@ def verify_deadline(deadline: str | None, source_text: str) -> GroundingResult:
                 "day and month found verbatim in the source text",
             )
 
-    found_anywhere = None
-    if found_anywhere:
-        return GroundingResult(
-            False,
-            found_anywhere,
-            f"day and month appear as {found_anywhere!r} but not near any deadline language",
-        )
     return GroundingResult(
         False, None, "day and month do not appear verbatim in the source text"
     )

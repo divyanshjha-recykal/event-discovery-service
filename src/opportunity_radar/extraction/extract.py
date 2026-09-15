@@ -281,6 +281,7 @@ def extract(
                 "submission_deadline": result.submission_deadline,
                 "deadline_verified": result.deadline_verified,
                 "criteria_count": len(result.eligibility_criteria),
+                "confidence_note": result.confidence_note,
             })
         return result
 
@@ -444,6 +445,7 @@ def _build_record(
             deadline_verified=grounding.verified,
             event_date=_as_date_string(payload.get("event_date")),
             source_url=source_url,
+            confidence_note=_as_text(payload.get("confidence_note")) or None,
         )
     except Exception as exc:  # pydantic ValidationError and friends
         return ExtractionFailure(

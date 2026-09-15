@@ -149,6 +149,26 @@ class RunBudget:
 
     # -- reporting ----------------------------------------------------------
 
+    def live(self) -> dict[str, float | int]:
+        """Counters as they stand, written on every event so the UI can meter them."""
+        return {
+            "spent": self.spent,
+            "searches": self.searches,
+            "scrapes": self.scrapes,
+            "llm_calls": self.llm_calls,
+            "elapsed": round(self.elapsed, 1),
+        }
+
+    def caps(self) -> dict[str, int]:
+        """The limits this run was configured with."""
+        return {
+            "tool_calls": self.tool_calls,
+            "max_searches": self.max_searches,
+            "max_scrapes": self.max_scrapes,
+            "max_llm_calls": self.max_llm_calls,
+            "wall_clock_seconds": self.wall_clock_seconds,
+        }
+
     def summary(self) -> str:
         return (
             f"tool calls {self.spent}/{self.tool_calls} · "

@@ -222,7 +222,7 @@ async def _record(
     ) as span:
         _ = span
     try:
-        await append_event(runtime.db, runtime.run_id, event)
+        await append_event(runtime.db, runtime.run_id, event, runtime.budget.live())
     except Exception:  # noqa: BLE001
         pass
 
@@ -471,7 +471,7 @@ RESULTS:
 def _link_chooser(runtime: WorkflowRuntime, today: date):
     """An async callable the traversal uses to pick which links to follow."""
 
-    async def choose(page, candidates: list[tuple[float, str, str]]) -> list[str]:
+    async def choose(page, candidates: list[tuple[str, str]]) -> list[str]:
         refusal = runtime.budget.refusal("select_links")
         if refusal:
             return []
@@ -586,8 +586,8 @@ async def research_node(
 
     ranked = [hit for hit in ordered if hit.url not in existing_seeds]
 
-    # The model chooses what to research; the keyword score only orders the pool
-    # it sees. Ranking is the fallback, never the gate.
+    # The model chooses what to research; search-engine order only sets the order
+    # of the pool it sees. Ordering is the fallback, never the gate.
     picks: list[tuple[object, str]] = []
     if ranked and not runtime.dry_run and runtime.budget.refusal("shortlist") is None:
         try:
@@ -948,7 +948,11 @@ async def finalize_node(
                 "category": result.category,
                 "submission_deadline": result.submission_deadline,
                 "deadline_verified": result.deadline_verified,
+                "event_date": result.event_date,
+                "deadline_note": result.deadline_note,
+                "base_title": result.base_title,
                 "criteria": list(result.eligibility_criteria),
+                "confidence_note": result.confidence_note,
             },
         )
 
@@ -1015,9 +1019,12 @@ async def finalize_node(
             payload["synthetic"] = "DRY-RUN FIXTURE — not a real opportunity"
         saved = await save_opportunity(runtime.db, payload)
         runtime.saved.append(candidate.source_url)
+        # Computed once and carried onto the event too: these say why a stored
+        # record should still be treated with care, and were previously only
+        # ever reachable in memory.
+        warnings = record_warnings(result)
         runtime.warnings.extend(
-            f"{candidate.source_url}: {warning}"
-            for warning in record_warnings(result)
+            f"{candidate.source_url}: {warning}" for warning in warnings
         )
         await clear_extraction_failure(runtime.db, candidate.source_url)
         await _record(
@@ -1029,6 +1036,7 @@ async def finalize_node(
             action=saved.action,
             title=result.title,
             completeness=completeness.as_dict(),
+            warnings=warnings,
         )
 
     summary = (

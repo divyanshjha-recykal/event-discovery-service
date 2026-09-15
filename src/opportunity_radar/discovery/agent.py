@@ -57,14 +57,7 @@ async def run_discovery(
             db,
             run_id,
             label,
-            {
-                "tool_calls": budget.tool_calls,
-                "max_searches": budget.max_searches,
-                "max_scrapes": budget.max_scrapes,
-                "max_llm_calls": budget.max_llm_calls,
-                "wall_clock_seconds": budget.wall_clock_seconds,
-                "workflow": "plan-research-analyze-finalize",
-            },
+            {**budget.caps(), "workflow": "plan-research-analyze-finalize"},
             queries,
         )
     except Exception:  # noqa: BLE001
@@ -153,17 +146,17 @@ async def run_discovery(
             result.get("summary", ""),
             trace_url,
             {
-                "tool_calls": budget.tool_calls,
-                "spent": budget.spent,
-                "searches": budget.searches,
-                "scrapes": budget.scrapes,
-                "llm_calls": budget.llm_calls,
-                "elapsed": round(budget.elapsed, 1),
+                # Caps as well as counters: this overwrites the whole `budget`
+                # field, so omitting them left the UI metering against zero.
+                **budget.caps(),
+                **budget.live(),
                 "stop_reason": budget.stop_reason,
                 "workflow": "plan-research-analyze-finalize",
             },
             counts,
             thinking,
+            list(runtime.warnings),
+            list(runtime.failures),
         )
     except Exception:  # noqa: BLE001
         pass

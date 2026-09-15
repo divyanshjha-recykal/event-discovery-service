@@ -20,6 +20,10 @@ from .state import EvidenceBundle, EvidencePage, SearchHit, WorkflowRuntime
 
 _MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 
+# What extraction actually reads per page, so the preview stored on the journey
+# is the evidence the model saw rather than an arbitrary slice of it.
+SCRAPE_PREVIEW_CHARS = 20_000
+
 # Firecrawl cannot read raster images and errors on them, so following one is a
 # paid call that can only fail. PDFs are deliberately absent from this list —
 # award guidelines and entry terms are very often PDFs and Firecrawl does read
@@ -180,6 +184,13 @@ async def resolve_evidence_bundle(
             chars=len(page.markdown),
             status_code=page.status_code,
             bare_domain=urlparse(page.url).path in ("", "/"),
+            page_title=page.title,
+            page_description=page.description,
+            links_found=len(page.links),
+            # The fetched text itself, so what the model read is inspectable
+            # rather than only its character count.
+            preview=page.markdown[:SCRAPE_PREVIEW_CHARS],
+            truncated=len(page.markdown) > SCRAPE_PREVIEW_CHARS,
         )
         if depth >= max_depth:
             continue

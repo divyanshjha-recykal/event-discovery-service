@@ -104,7 +104,7 @@ read by no code.** Left over from a deleted experiment (see §12).
 
 ## 3. Repository map
 
-~5,000 lines of Python across 34 modules, plus an 872-line React frontend.
+~5,200 lines of Python across 34 modules, plus a ~2,000-line React frontend.
 
 ```
 src/opportunity_radar/
@@ -115,7 +115,7 @@ src/opportunity_radar/
 │
 ├── discovery/           ← the agentic half
 │   ├── agent.py         run_discovery() — public runner, run records, status
-│   ├── workflow.py      the LangGraph graph, all 4 nodes, all 4 prompts  (1,076 ln)
+│   ├── workflow.py      the LangGraph graph, all 4 nodes, all 4 prompts  (1,084 ln)
 │   ├── state.py         DiscoveryState, EvidenceBundle, CandidateVerdict, runtime
 │   ├── budget.py        RunBudget — hard caps enforced in the tool wrapper
 │   ├── providers.py     tavily_search(), firecrawl_fetch()
@@ -124,7 +124,7 @@ src/opportunity_radar/
 │   └── actionability.py date arithmetic + HTTP status; completeness checks
 │
 ├── extraction/          ← plain functions, not an agent
-│   ├── extract.py       extract() → record | typed failure            (518 ln)
+│   ├── extract.py       extract() → record | typed failure            (520 ln)
 │   ├── schema.py        OpportunityRecord, strict pydantic validation
 │   ├── failures.py      FailureReason enum
 │   ├── grounding.py     deadline_verified — string check, not model opinion
@@ -145,13 +145,32 @@ src/opportunity_radar/
 │   ├── runs.py          run records + append-as-you-go journey
 │   └── failures.py      extraction failure records
 │
-└── api/app.py           FastAPI — one read endpoint + run triggers      (395 ln)
+└── api/app.py           FastAPI — reads, run triggers, delta feed       (542 ln)
 
-frontend/src/App.jsx     the single-page dashboard                       (653 ln)
+frontend/src/
+├── main.jsx             BrowserRouter mount
+├── App.jsx              layout shell, routes, run lifecycle, config persistence
+├── api.js               fetch helper, stage maps, config <-> request mapping
+├── export.js            CSV builders, download, clipboard
+├── icons.jsx            inline stroke icons (no icon dependency)
+├── styles.css           design tokens, light/dark, all layout
+└── components/
+    ├── Sidebar.jsx      configurator, budget caps, run list, collapse rail
+    ├── RunView.jsx      one run: header, meters, tabs, delta polling
+    ├── Journey.jsx      stage passes, step cards, reasoning, final output
+    ├── Opportunity.jsx  one stored record with its eligibility table
+    ├── Overview.jsx     everything stored across all runs + programme registry
+    └── ExportPanel.jsx  CSV preview, download and copy
+
 golden_set/              Stage 0 reference data (extraction + eligibility)
 retrieval_set/           207 hand-labelled search results (see §13)
 scripts/                 run_discovery, run_eligibility, run_golden_set, smoke tests
 ```
+
+Frontend dependencies are React, `react-router-dom` and Vite. No UI framework, no
+icon package, no CSS framework — icons are inline SVG and styling is one stylesheet of
+CSS custom properties. Geist and Geist Mono load from Google Fonts with a full system
+fallback stack, so an offline first paint still renders correctly.
 
 ---
 
@@ -181,9 +200,23 @@ extraction_completeness: {score, identity, open_state, deadline,
                           eligibility, source_coverage, gaps[]}
 judging_criteria: [str]            # from analyze
 application_requirements: [str]    # from analyze
-discovery_run_id
+confidence_note: str|null          # the extractor's own stated uncertainty
+discovery_run_id                   # last run to write this record, not an owner
 eligibility: {…}                   # attached later by the Eligibility Agent
 ```
+
+Two fields deserve a note.
+
+`confidence_note` is the model's one-sentence statement of what it was unsure about.
+The extraction schema has always required it, but `_build_record()` never read it, so
+it was generated and discarded on every extraction. It is now stored, traced and
+displayed. **This field is not in `CLAUDE.md`'s schema** — it is an additive, optional
+extension.
+
+`discovery_run_id` records the **last** run to write the record, not the run that owns
+it. Because records are upserted on their identity key, a later run that re-finds the
+same opportunity overwrites it. Nothing should treat this field as "which run found
+this" — the per-run views derive that from each run's own journey instead.
 
 
 
@@ -209,8 +242,41 @@ so the registry cannot drift out of sync with what was actually stored
 ### `runs`
 
 One document per run, with the journey appended **as it happens** so a crashed run
-still leaves a readable trail. Carries `status`, `budget`, `counts`, `thinking`,
-`summary`, `trace_url`, and `journey[]` at one row per tool call.
+still leaves a readable trail.
+
+```
+run_id, model, status, started_at, finished_at
+budget:   { tool_calls, max_searches, max_scrapes, max_llm_calls,
+            wall_clock_seconds,            # the caps this run was configured with
+            spent, searches, scrapes, llm_calls, elapsed,   # live counters
+            stop_reason }
+counts:   { searched, scraped, extracted, extraction_failed,
+            saved, rejected, historical, failed }
+queries:  [str]        # caller-supplied, empty when the planner wrote the plan
+thinking: [str]        # each planned query with its rationale
+warnings: [str]        # per-record caveats, accumulated
+failures: [str]        # provider and model failures during the run
+summary, trace_url
+journey:  [ … ]        # one row per tool call
+eligibility_done, eligibility_evaluated, eligibility_failures
+```
+
+`budget` carries both the caps and the live counters. `append_event()` `$set`s the
+counters on every journey push, which is what lets the UI meter a run while it is still
+going; `finish_run()` rewrites the whole field with `caps() | live()`. An earlier
+version wrote only the counters at the end, silently dropping the caps.
+
+`warnings` and `failures` were computed on every run and never persisted, so nothing
+downstream could show that a stored record came with caveats.
+
+**Journey rows** are `{seq, t, tool, node, outcome, …}` where `seq` is the 1-based
+position. Because `_record()` swallows a failed Mongo write, `seq` can contain gaps
+while positions stay contiguous — which is why the delta endpoint slices by position
+rather than by `seq`.
+
+A `scrape` row additionally carries `page_title`, `page_description`, `links_found`,
+and `preview` — the first 20,000 characters of the fetched markdown, the same bound
+extraction reads, so what the model actually saw is inspectable after the fact.
 
 ### `extraction_failures`
 
@@ -229,254 +295,308 @@ Known and accepted limit.
 
 
 
-## 5. The pipeline, end to end
+## 5. The discovery graph, in detail
 
+### Why a graph rather than a free-form agent
 
+The Discovery Agent is a **bounded LangGraph state machine**, not a model in a
+tool-calling loop. The model makes every judgement that requires reading meaning —
+what to search for, which results matter, which links to follow, what counts as an
+opportunity, whether to pursue it — but it never decides *what happens next*. The
+sequence of stages, the caps on each, and the single re-plan are fixed in code.
+
+This matters for cost and for reproducibility. A free-form agent can spend an
+unbounded number of calls deciding it needs one more search; this graph cannot. Every
+run visits the same four nodes in the same order, and the only branch is a single
+optional loop back to planning.
+
+### The state object
+
+`DiscoveryState` (`discovery/state.py`) is a `TypedDict` threaded through every node.
+LangGraph merges each node's returned dict into it.
+
+| Field | Written by | Carries |
+| --- | --- | --- |
+| `as_of_date` | runner | The run date, injected so "this year" is never the model's guess |
+| `supplied_queries` | runner | Caller-supplied queries; non-empty disables planning **and** re-planning |
+| `memory` | `plan_queries` | Distilled profile + known organising bodies + programmes due soon |
+| `planned_queries` | `plan_queries` | `PlannedQuery(query, intent, geography, target_year, rationale)` |
+| `search_hits` | `research` | Every `SearchHit` seen this run, deduplicated by canonical URL |
+| `evidence_bundles` | `research` | `EvidenceBundle(seed_url, pages)` — the fetched pages per seed |
+| `candidates` | `analyze` | `CandidateVerdict` — one per opportunity identified, pursue or skip |
+| `analyzed_seeds` | `analyze` | Seeds already analysed, so a re-plan does not pay to analyse them twice |
+| `analysis_errors` | `analyze` | Per-bundle failures, which also suppress the re-plan |
+| `rejected` | `finalize` | Candidates that did not become records, with the stage that stopped them |
+| `summary` | `finalize` | One-line account of the run |
+| `replan_count` | `analyze` | Incremented only when a pass yielded nothing; caps the loop |
+
+Alongside it, `WorkflowRuntime` is a plain dataclass holding the things that are *not*
+graph state — the database handle, the `RunBudget`, the model id, the run id, and the
+accumulating `journey`, `saved`, `failures`, `warnings` and `historical` lists. It is
+bound into each node with `functools.partial`, so nodes stay pure functions of state
+plus services.
 
 ### Graph shape
 
-`LangGraph StateGraph`, four nodes, one conditional edge (`workflow.py:1050-1076`):
-
 ```
-START → plan_queries → research → analyze → ┬─ pursue found ──→ finalize → END
-                           ↑                ├─ errors ────────→ finalize → END
-                           └──── replan ────┘  (at most once)
+START → plan_queries → research → analyze ─┬─ something to pursue ──→ finalize → END
+             ↑                             ├─ analysis errored ─────→ finalize → END
+             └────────── replan ───────────┘   (at most once)
 ```
 
-`route_after_analyze` (`workflow.py:846-860`) sends the run to `finalize` if anything
-was pursued or if analysis errored; it replans only when nothing was pursued, no
-errors occurred, `replan_count <= 1`, and more than 3 budget calls remain.
-`recursion_limit` is 10 — one optional replan means at most seven node executions.
+Compiled in `build_discovery_graph()`. `recursion_limit` is 10: one optional re-plan
+means at most seven node executions, so the limit can only be reached by a bug.
 
-Every node is wrapped in `_traced_node` so its LLM calls nest under one Langfuse span
-named for the node, with budget before and after attached.
+Every node is wrapped by `_traced_node`, which opens a Langfuse span named
+`discovery.<node>` and attaches the budget before and after. That is why a trace shows
+model calls nested under the stage that made them rather than as a flat list.
 
-### Step 0 — Profile distillation (deterministic)
+---
 
-`profile_seed.discovery_seed()` pulls five named sections **verbatim** from
-`BusinessProfile.md`: Identity, Sector and business model, International operations,
-Recognition history, Known exclusions. A renamed section raises
-`ProfileSectionMissing` rather than silently returning a thinner block.
+### Node 1 — `plan_queries`
 
-Mechanical on purpose — a verbatim extraction cannot drift from the source; a
-paraphrase can, silently.
+**Reads** `as_of_date`, `supplied_queries`, `memory`.
+**Writes** `memory`, `planned_queries`. **Costs** one model call (`plan`).
 
-`profile_facts()` additionally reads labelled lines to get `geographies` and `sectors`
-for the planner. Only **sector** lines are read for sectors — "Materials handled" and
-"Business model" are excluded, because feeding PET/HDPE to the planner produced
-queries no award is named after (`profile_seed.py:68-70`).
+Three paths, in priority order:
 
-Discovery gets this subset; **Eligibility gets the whole document**, because any field
-could matter to any criterion.
+1. **Caller supplied queries** — wrapped as `PlannedQuery` with
+   `intent="mixed"`, no model call. This also disables re-planning, because the caller
+   asked a specific question and a re-plan would silently change it.
+2. **Dry run** — three fallback queries from the profile, no network.
+3. **Normal** — one strict `json_schema` call returning 8–10 queries.
 
-`_memory()` (`workflow.py:216-229`) appends the known organizing bodies and the
-programmes `due_soon(lookahead_months=2)` to the seed, so the planner knows what has
-already been found.
+Before the call, `_memory()` assembles what the planner is allowed to know:
+`discovery_seed()` (five verbatim profile sections), `known_orgs()` (organising bodies
+already in the registry) and `due_soon(lookahead_months=2)` (programmes whose typical
+window is about to open). The planner is told what has already been found so it does
+not spend the run rediscovering it.
 
-### Step 1 — `plan_queries` (1 LLM call)
+The prompt's governing rule is query length:
 
-Emits **8–10 queries**, strictly validated (`_QueryPlanModel`, `min_length=8, max_length=10`). Each carries `query`, `intent`, `geography`, `target_year`,
-`rationale`. `intent` has no `"grant"` value.
+> **KEEP EACH QUERY SHORT — three or four content words.** A search engine returns only
+> pages matching every word you give it, so each extra word narrows the results.
 
-The prompt's central rule (`workflow.py:333-350`):
+It also bans quotation marks, unexplained acronyms, product and hardware category
+names, and copying programme names out of the profile; and it directs variation across
+the field named, whether a year appears, the kind of recognition, the kind of body that
+runs it, and company stage. Seven or eight queries must name the primary market.
 
-> **KEEP EACH QUERY SHORT — three or four content words.** A search engine returns
-> only pages matching every word you give it, so each extra word narrows the results.
+**Geography and sector are read from `BusinessProfile.md`, never from code.** An
+earlier version hardcoded a region into the prompt and pointed an entire run at a
+market the business has no presence in.
 
-It bans quotation marks, unexplained acronyms, product/hardware category names, and
-copying programme names out of the profile. It directs variation across field, year
-presence, kind of recognition, kind of body, and company stage. Seven or eight
-queries must name the primary market; the rest name no country.
+**On failure** `_fallback_queries()` builds one query per stated sector in the primary
+market. It **raises** rather than inventing geography if the profile yields nothing —
+a fallback that searches for the wrong company is worse than no fallback. The fallback
+is recorded as `outcome="fallback"` and surfaces in the UI as a red banner, because a
+silent fallback once cost a whole run.
 
-**Geography and sector come from the profile, never from code.** An earlier version
-hardcoded "Cover India and the Middle East" into the prompt and pointed a whole run at
-a region the business has no presence in.
+---
 
-**Fallback.** If planning throws, `_fallback_queries()` builds one query per stated
-sector in the primary market. It **raises** rather than inventing geography if the
-profile yields nothing — a fallback that searches for the wrong company is worse than
-no fallback. A fallback plan is surfaced in the UI as a red banner, because a silent
-fallback once cost an entire run.
+### Node 2 — `research`
 
-### Step 2 — `research` (1 search per query + 1 shortlist call + traversal)
+**Reads** `planned_queries`, `search_hits`, `evidence_bundles`, `memory`.
+**Writes** `search_hits`, `evidence_bundles`.
+**Costs** one search per query, one `shortlist` model call, one `select_links` model
+call per seed, and one scrape per page fetched.
 
-**Search.** `tavily_search(query, max_results=7, search_depth="advanced")`, with nine
-social domains excluded. Each hit keeps title, URL, an 800-char snippet, and the query
-that found it.
+Four phases inside one node.
 
-`country` is deliberately **not** passed. Measured against live queries it never
-biased toward the named market, and combined with the market in the query text it
-returned **zero** results. Geography belongs in the query text, which does work
-(`providers.py:61-63`).
+**a. Search.** `tavily_search(query, max_results=7, search_depth="advanced")`, with nine
+social domains excluded. Queries already seen this run are skipped, so a re-plan that
+repeats a query costs nothing. A failure is logged to the journey and the run
+continues.
 
-**Ordering.** Round-robin across queries in search-engine order, so no single query
-dominates (`workflow.py:568-586`). URLs are canonicalised (lowercase host, strip
-`www.`, strip tracking params, normalise trailing slash) and deduplicated.
+Tavily's `country` parameter is deliberately **not** used: measured against live
+queries it never biased toward the named market, and combined with the market in the
+query text it returned zero results. Geography belongs in the query text, which works.
 
-There is **no keyword scoring**. A regex tuned for award-marketing words scored
-"Sustainability Leadership Awards" at zero and dropped it from two separate runs.
+**b. Ordering.** Hits are grouped by the query that found them and **round-robined**,
+so one productive query cannot crowd out the rest. URLs are canonicalised — lowercase
+host, `www.` stripped, tracking parameters removed, trailing slash normalised — and
+deduplicated. There is **no keyword scoring**: a regex tuned for award-marketing words
+scored "Sustainability Leadership Awards" at zero and dropped it from two runs.
 
-**Shortlist** (1 LLM call). The model sees up to `SHORTLIST_POOL = 80` results as a
-numbered list and returns **indices**, not URLs — a model cannot hallucinate an index
-that resolves to the wrong page. It picks `MAX_RESEARCH_CANDIDATES = 4`.
+**c. Shortlist.** Up to `SHORTLIST_POOL = 80` hits are presented as a numbered list and
+the model returns **indices**, not URLs — an index cannot resolve to a page the model
+invented. It picks `MAX_RESEARCH_CANDIDATES = 4`.
 
-The prompt turns on one question (`workflow.py:425-430`):
+The prompt reduces the decision to one question:
 
 > **Does the organisation behind this page RUN the programme, or is it writing about
 > someone else's?**
 
-It states explicitly that a landing page is not worse than a deep one (links are
-followed from whatever is picked), and that the organisation and programme should be
-judged rather than the domain name — newspapers, chambers of commerce and industry
-associations run a large share of all awards.
+It states that a landing page is not worse than a deep one, since links are followed
+from whatever is picked, and that the organisation and programme should be judged
+rather than the domain name — newspapers, chambers of commerce and industry
+associations run a large share of all awards. If the call fails, the fallback is
+search-engine order: ranking is the fallback, never the gate.
 
-If shortlist fails, the fallback is search-engine order. Ranking is the fallback,
-never the gate.
+**d. Traversal.** For each pick, `resolve_evidence_bundle()` builds an `EvidenceBundle`
+under hard caps: `max_depth=2`, `max_pages=3`, `reserve_calls=3`.
 
-**Traversal and scraping** (`link_resolver.resolve_evidence_bundle`). Per seed:
-`max_depth=2`, `max_pages=3`, `reserve_calls=3`.
-
-- Fetch the seed via Firecrawl (`formats=["markdown","links"]`,
-`only_main_content=True`, 120s timeout, 200,000-char ceiling).
-- If the page is low quality — non-2xx, under 500 chars, or no identifiable title —
-retry once with `only_main_content=False` and `wait_for=1500`, keeping whichever is
-longer.
+- Fetch the seed through Firecrawl (`formats=["markdown","links"]`,
+  `only_main_content=True`, 120s timeout, 200,000-character ceiling).
+- If the result is low quality — non-2xx, under 500 characters, or no identifiable
+  title — retry once with `only_main_content=False` and `wait_for=1500`, keeping
+  whichever is longer.
 - Collect same-site, non-binary links in page order. **No scoring** — only removal of
-what cannot be fetched. PDFs are deliberately kept; award guidelines are often PDFs
-and Firecrawl reads them.
-- **Only at depth 0**, one `select_links` LLM call picks at most
-`MAX_LINKS_PER_PAGE = 2` from up to 40 candidates.
-- If that call is unavailable or fails, **follow nothing**. The seed page alone beats
-a keyword guess at which link matters.
+  what cannot be fetched. PDFs are deliberately retained: award guidelines are often
+  PDFs and Firecrawl reads them.
+- **At depth 0 only**, one `select_links` call picks at most `MAX_LINKS_PER_PAGE = 2`
+  from up to 40 candidates. Firing it per page burned five calls where three sufficed.
+- If that call is unavailable or fails, **follow nothing**. The seed page alone beats a
+  keyword guess at which link matters.
 
-Restricting `select_links` to depth 0 was a fix: firing it per page burned 5 calls
-where 3 sufficed.
-
-### Step 3 — `analyze` (1 LLM call per evidence bundle)
-
-Input is `bundle.bounded_text(ANALYSIS_PAGE_CHARS = 40_000)` — **per page**, not per
-bundle. A single positional slice across the whole bundle meant a long seed page
-consumed the entire window and the L1 pages we paid to fetch were never read.
-
-A bundle under `MIN_BUNDLE_CHARS = 400` is treated as a **failed fetch** (bot block,
-error page, redirect) and is not sent to the model at all — the failure is attributed
-to the scrape, not to analysis.
-
-The model returns at most 3 candidates per bundle, each with `decision`
-(`pursue`/`skip`), `reason`, and three separate lists: `entry_eligibility`,
-`judging_criteria`, `application_requirements`.
-
-The prompt (`workflow.py:636-668`) states that entry eligibility is the heart of the
-task — every stated condition as its own item, in the page's own words, never
-summarised into one line and never invented. It prefers the umbrella programme over
-one of its categories unless the category is entered independently. It skips past
-editions, closed windows, individual/student/researcher-only programmes, and grants.
-
-Candidates are deduplicated on `(target_title.casefold(), source_url)` so one entity
-reached through several search hits is not extracted repeatedly.
-
-### Step 4 — `finalize` (1 extract call per pursued candidate)
-
-For each `pursue` candidate, in order:
-
-**a.** `extract()` — a plain function, not an agent (`extraction/extract.py`). Strict
-`json_schema`, one retry that feeds the specific error back, then a **typed failure**:
-`insufficient_content`, `opportunity_closed`, or `malformed_response`. It is
-contractually guaranteed never to raise — an exception escaping would take down the
-whole Discovery run around it.
-
-Input is `bundle.extraction_text(per_page_chars=20_000)`, ordered so the canonical
-page and supporting URLs come first.
-
-Two things the model does **not** get the final word on:
-
-- `deadline_verified` — a plain string check (below).
-- `base_title` — a deterministic edition strip on top of the model's answer, so the
-identity key cannot drift between models or years.
-
-The prompt's eligibility rules are explicit about granularity: one complete,
-independently checkable condition per entry; do not split a single sentence into
-fragments; **keep alternatives together** ("Open to individuals or institutions" is
-ONE condition); do not return a paragraph either. Only conditions for *entering* —
-who attends or speaks is not eligibility.
-
-Schema validation rejects a single entry over 400 characters as an unsplit paragraph
-(`extraction/schema.py:76-91`), and bounds `cycle_year` to 1990–2100.
-
-Models do not reliably honour the schema, so `_as_text`, `_as_date_string` and
-`_as_criteria` coerce dicts, lists and numbers rather than assuming — assuming here
-once raised a `KeyError` mid-run and killed a whole Discovery pass.
-
-**b.** `verify_deadline()` — `extraction/grounding.py`. The day and month of the
-extracted deadline must appear **verbatim** in the source text, across five surface
-forms (`19 June`, `June 19th`, `19/06`, `06/19`, ISO fragment `06-19`). The year may
-be inferred from page context without failing the check — stating a day and month
-without repeating an obvious year is normal, and failing on it would reject most real
-pages. What this catches is the opposite case: a model inventing a date that appears
-nowhere.
-
-It no longer requires "deadline language" nearby. That caged a mechanical
-anti-hallucination check behind a keyword list, so a date sitting in a table failed
-verification despite being right there on the page.
-
-**c.** `assess_completeness()` — five booleans; see §9 for its defects.
-
-**d.** `assess_actionability()` — `discovery/actionability.py`. Date arithmetic and
-HTTP status **only**:
-
-
-| Condition                        | Verdict                                                    |
-| -------------------------------- | ---------------------------------------------------------- |
-| target page returned non-2xx     | `reject`                                                   |
-| submission deadline before today | `historical`                                               |
-| event date before today          | `historical`                                               |
-| cycle_year before this year      | `historical`                                               |
-| no date and no deadline note     | `actionable` + "no date found — verify on the source page" |
-| otherwise                        | `actionable`                                               |
-
-
-**Nothing here reads the page's wording.** Closure, past editions and openness are
-meaning, and the analyser and extractor — both of which read the whole page — already
-judge them. A keyword regex here was a third and worse opinion: "Nominate Now" and
-"Express Interest" failed it, so Greentech, CII and the ET Sustainability Awards were
-each discarded (`actionability.py:85-88`).
-
-A `historical` verdict with a real deadline still calls `record_edition()` — a past
-edition is worthless as an opportunity but valuable to the programme registry, which
-needs edition history to compute `typical_window`.
-
-**e.** `save_opportunity()` — atomic upsert on the identity key. A genuinely new
-identity also records an edition against its programme.
-
-### Step 5 — Eligibility (1 LLM call per saved opportunity)
-
-**Runs after** `run_discovery()` **returns, outside the graph, and does not consume the
-run budget** (`api/app.py:224-268`). Verified: `grep -rn "budget" src/opportunity_radar/eligibility/` returns nothing.
-
-Input: the stored `eligibility_criteria` list and **the full business profile**.
-Explicitly *not* the source page — see §12.
-
-Output: two buckets.
-
-- `criteria_results` — `{criterion, status: met|not_met|unclear, reasoning}` for
-conditions a specific fact settles.
-- `qualitative_notes` — `{criterion, note}` for conditions no fact can settle, and for
-conditions belonging to a track this company would not enter.
-
-The prompt is explicit about alternative categories: judge only the track the company
-would realistically enter, put the other tracks' conditions in `qualitative_notes`
-with the track named, and **never** mark a condition `not_met` because it belongs to a
-category the company was not entering. It also forbids the opposite abuse — moving a
-genuine requirement into `qualitative_notes` to avoid saying `not_met`.
-
-`confidence` and `score` are **computed by plain functions**, never self-reported — a
-model asked to rate its own certainty rates its own certainty, not the evidence.
-
-Uses `json_object`, not strict `json_schema` (unlike every Discovery call).
+Each fetched page is recorded to the journey with its status code, depth, link count,
+page metadata and the **first 20,000 characters of its markdown** — the same bound
+extraction reads, so what the model saw is inspectable afterwards.
 
 ---
 
+### Node 3 — `analyze`
 
+**Reads** `evidence_bundles`, `analyzed_seeds`, `memory`, `as_of_date`.
+**Writes** `candidates`, `analyzed_seeds`, `analysis_errors`, `replan_count`.
+**Costs** one model call per not-yet-analysed bundle.
+
+Only bundles whose `seed_url` is absent from `analyzed_seeds` are processed, so a
+re-plan never pays twice for the same site.
+
+A bundle under `MIN_BUNDLE_CHARS = 400` is treated as a **failed fetch** — bot block,
+error page or redirect — and is not sent to the model at all. The failure is attributed
+to the scrape rather than to analysis, so the trace blames the stage that actually
+broke.
+
+Evidence is bounded at `ANALYSIS_PAGE_CHARS = 40_000` **per page, not per bundle**. A
+single positional slice across the whole bundle meant a long seed page consumed the
+entire window and the depth-1 pages the run had paid to fetch were never read.
+
+The model returns at most three candidates per bundle, each carrying `decision`
+(`pursue`/`skip`), `reason`, and three separate lists: `entry_eligibility`,
+`judging_criteria`, `application_requirements`. The prompt states that entry
+eligibility is the heart of the task — every stated condition as its own item, in the
+page's own words, never summarised into one line and never invented. It prefers the
+umbrella programme over one of its categories unless the category is entered
+independently, and skips past editions, closed windows, individual/student/researcher-only
+programmes, and grants.
+
+Candidates are deduplicated on `(target_title.casefold(), source_url)`, so one entity
+reached through several search hits is not extracted repeatedly.
+
+`replan_count` increments **only** when a pass produced neither a pursued candidate nor
+an error — that is, when the run genuinely found nothing and a different query plan
+might help.
+
+---
+
+### Routing — `route_after_analyze`
+
+The graph's only branch:
+
+```python
+if any(item.decision == "pursue" for item in state["candidates"]):
+    return "finalize"          # something to extract — go do it
+if state.get("analysis_errors"):
+    return "finalize"          # errors are not fixed by new queries
+if (not state["supplied_queries"]
+        and state["replan_count"] <= 1
+        and runtime.budget.remaining > MIN_CALLS_AFTER_RESEARCH):
+    return "replan"            # nothing found, budget left, try a new plan
+return "finalize"
+```
+
+Four guards, each for a distinct reason: a re-plan is pointless when there is already
+something to extract; it cannot fix a provider error; it would override a caller who
+asked a specific question; and it must not consume the budget that finalisation needs
+to store what has already been paid for.
+
+---
+
+### Node 4 — `finalize`
+
+**Reads** `candidates`, `evidence_bundles`, `as_of_date`, `rejected`.
+**Writes** `rejected`, `summary`. **Costs** one `extract` call per pursued candidate.
+
+`skip` candidates go straight to `rejected` with the analyser's reason. For each
+`pursue` candidate, five steps run in order and any one of them can stop it.
+
+**a. `extract()`** — a plain function, not an agent. Strict `json_schema`, one retry
+that feeds the specific error back, then a **typed failure**: `insufficient_content`,
+`opportunity_closed`, or `malformed_response`. It is contractually guaranteed never to
+raise, because an exception escaping would take down the Discovery run around it.
+
+Input is `bundle.extraction_text(per_page_chars=20_000)`, ordered so the canonical page
+and its supporting URLs come first. Page title and meta description are passed as
+evidence — some sites render their name only as a logo image.
+
+Two things the model does not get the final word on: `deadline_verified` (a string
+check) and `base_title` (a deterministic edition strip), because both feed the identity
+key and must not drift between models or years.
+
+**b. `verify_deadline()`** — the day and month of the extracted deadline must appear
+**verbatim** in the source text, across five surface forms. The year may be inferred
+from page context without failing the check; stating a day and month without repeating
+an obvious year is normal. What this catches is the opposite case: a date the model
+invented that appears nowhere on the page.
+
+**c. `assess_completeness()`** — five booleans and their mean. See §9 for its defects.
+
+**d. `assess_actionability()`** — date arithmetic and HTTP status **only**:
+
+| Condition | Verdict |
+| --- | --- |
+| Target page returned non-2xx | `reject` |
+| Submission deadline before today | `historical` |
+| Event date before today | `historical` |
+| `cycle_year` before this year | `historical` |
+| No date and no deadline note | `actionable`, with "no date found — verify on the source page" |
+| Otherwise | `actionable` |
+
+**Nothing here reads the page's wording.** Closure and openness are meaning, and the
+analyser and extractor — both of which read the whole page — already judge them. A
+keyword regex here was a third and worse opinion: "Nominate Now" and "Express Interest"
+failed it, so Greentech, CII and the ET Sustainability Awards were each discarded.
+
+A `historical` verdict with a real deadline still calls `record_edition()`. A past
+edition is worthless as an opportunity but valuable to the registry, which needs
+edition history to compute `typical_window`.
+
+**e. `save_opportunity()`** — atomic upsert on the identity key. A genuinely new
+identity also records an edition against its programme. `record_warnings()` then
+produces per-record caveats — past edition, ungrounded deadline, `base_title` residue,
+no deadline at all — which are attached to the journey event *and* accumulated onto the
+run record.
+
+---
+
+### Stage 5 — Eligibility, outside the graph
+
+**Runs after `run_discovery()` returns and does not consume the run budget.** Verified:
+`grep -rn "budget" src/opportunity_radar/eligibility/` returns nothing. The loop reads
+`{"source_url": {"$in": discovery.saved}}`, so it judges only what this run accepted,
+never stale records from earlier runs.
+
+Input is the stored `eligibility_criteria` list and the **full business profile** —
+unlike Discovery, which gets a distilled seed, because any profile field could decide
+any criterion. It does **not** receive the source page; see §12.
+
+Output is two buckets: `criteria_results` (`met` / `not_met` / `unclear`, each with
+reasoning) for conditions a fact settles, and `qualitative_notes` for conditions no
+fact can settle and for conditions belonging to a track this company would not enter.
+
+The prompt is explicit in both directions on alternative categories: judge only the
+track the company would realistically enter and name the others, but never move a
+genuine requirement into `qualitative_notes` to avoid saying `not_met`.
+
+`confidence` and `score` are computed by plain functions and never self-reported — a
+model asked to rate its own certainty rates its own certainty, not the evidence.
+
+This is the one model call in the system that uses `json_object` rather than strict
+`json_schema`.
+
+---
 
 ## 6. Model versus deterministic code
 
@@ -730,6 +850,23 @@ harm: `rank_search_hit`, `score_link`, the
 
 Verified, with evidence. Ordered by impact.
 
+**Resolved since the first draft of this document**, listed so the history is not lost:
+
+- `confidence_note` was generated on every extraction and discarded. Now stored,
+  traced and displayed.
+- Run `warnings` and `failures` were computed and never persisted. Now written by
+  `finish_run()` and shown per run, with per-record caveats also attached to the
+  `save_opportunity` journey row.
+- `finish_run()` overwrote the `budget` field with counters only, dropping the caps, so
+  a finished run had nothing to meter against. Now writes `caps() | live()`.
+- Live budget counters were only written at start and finish. `append_event()` now
+  `$set`s them on every journey push.
+- Four of the five budget caps were accepted by the API and silently discarded.
+- Fetched page content was never retained, so a failed extraction could not be
+  diagnosed without re-running. The first 20,000 characters are now on the journey.
+- A page that failed to load appeared in the journey and nowhere else; unreachable
+  pages now surface in the run's set-aside list.
+
 **1. Extraction splits the same sentence inconsistently.** Two records from the same
 organiser, same boilerplate:
 
@@ -811,11 +948,9 @@ decision since has been made by eyeballing single runs.
 **13.** `OPENROUTER_RERANK_MODEL` **is configured and unused.** Declared in `.env.example`
 with a comment describing behaviour that no longer exists.
 
-**14. Stale annotations.** `_link_chooser`'s signature says
-`candidates: list[tuple[float, str, str]]` but `_candidate_links` returns 2-tuples
-(behaviour is correct, the hint is wrong). `research_node` carries a comment about a
-"keyword score" that no longer exists. `grounding.py:112-118` has a dead
-`found_anywhere = None; if found_anywhere:` branch.
+**14. `/api/state` still returns every opportunity on every load.** Fine at the current
+scale, but it has no pagination and no run filter, so it grows without bound as runs
+accumulate. The per-run views do not use it.
 
 ---
 
@@ -858,15 +993,19 @@ examples, and **5 hand-written eligibility criteria sets** spanning `met`, `not_
 
 | Endpoint              | Method | Purpose                                     |
 | --------------------- | ------ | ------------------------------------------- |
-| `/api/health`         | GET    | Mongo ping                                  |
-| `/api/state`          | GET    | everything the page renders, one round trip |
-| `/api/pipeline`       | POST   | discovery **then** eligibility, one action  |
-| `/api/runs`           | POST   | discovery only                              |
-| `/api/runs/{id}`      | GET    | one run with its full journey               |
-| `/api/runs/{id}/stop` | POST   | cancel in flight; saves still go through    |
-| `/api/eligibility`    | POST   | evaluate stored records lacking a verdict   |
-| `/api/reference-sets` | GET    | the hand-written Stage 0 criteria sets      |
-| `/api/database/clear` | POST   | wipe all four collections (demo reset)      |
+| `/api/health`                | GET    | Mongo ping                                              |
+| `/api/state`                 | GET    | global metrics, all opportunities, programmes, run list |
+| `/api/pipeline`              | POST   | discovery **then** eligibility, one action              |
+| `/api/runs`                  | POST   | discovery only                                          |
+| `/api/runs/{id}`             | GET    | one run with its full journey                           |
+| `/api/runs/{id}/events`      | GET    | `?after=N` — run metadata plus only newer journey rows  |
+| `/api/runs/{id}/results`     | GET    | what that run saved, set aside and failed on            |
+| `/api/runs/{id}/stop`        | POST   | cancel in flight; saves still go through                |
+| `/api/runs/{id}`             | DELETE | remove one run record; stored opportunities are kept    |
+| `/api/eligibility`           | POST   | evaluate stored records lacking a verdict               |
+| `/api/reference-sets`        | GET    | the hand-written Stage 0 criteria sets                  |
+| `/api/database/clear`        | POST   | wipe all four collections (demo reset)                  |
+| `/{path}`                    | GET    | SPA fallback, so `/run/<id>` survives a refresh         |
 
 
 Runs execute as FastAPI `BackgroundTasks`; the journey is written to Mongo step by
@@ -877,11 +1016,110 @@ survive a server restart**.
 `POST /api/runs` is a deliberate, agreed deviation from Stage 5's "read-only" rule. It
 triggers work; it does not judge an opportunity or write to the business profile.
 
+### Run configuration
+
+Both run endpoints take the same `RunConfig` body. A blank `model` is coerced to
+`None`, meaning "use `OPENROUTER_MODEL`", so any OpenRouter model id can be typed in
+without a code change. All five budget caps are accepted and passed through
+`to_budget()`; an earlier version passed only `tool_calls`, which left
+`max_llm_calls=16` silently capping every run however high the headline budget was set.
+
+### Incremental polling
+
+`/api/runs/{id}/events?after=N` returns the run document minus its journey, plus a
+positional slice of the journey after `N`. The whole-document poll it replaced re-sent
+every search snippet every 1.5 seconds — about **6.2 MB over a 90-second run**, growing
+with journey length; the delta feed transfers about **0.15 MB**, and each row exactly
+once.
+
+Positional slicing is deliberate. `_record()` wraps its Mongo write in
+`try/except: pass`, so a dropped write leaves a gap in `seq` while positions stay
+contiguous — a `seq`-based cursor would stall or skip across such a gap. Simulated over
+40 poll cycles at a 5% write-failure rate, the positional cursor reconstructed the
+stored journey exactly, with no gaps and no duplicates.
+
+### Deleting a run
+
+`DELETE /api/runs/{id}` removes the run record and its journey. It refuses with 409
+while the run is in flight, and it deliberately **does not** touch `opportunities` or
+`programs`: a record is upserted on its own identity and may have been confirmed by
+later runs, so deleting a run must not delete findings that outlived it.
+
+### Export
+
+CSV generation is entirely client-side (`frontend/src/export.js`) — no endpoint, no
+server round trip. Three sheets: one row per opportunity, one row per eligibility
+condition, and one row per journey step. Quoting is RFC 4180, so commas, embedded
+quotes and newlines inside reasoning survive; a UTF-8 BOM is prepended so Excel opens
+non-ASCII correctly. Each sheet can be downloaded or copied to the clipboard.
+
 ---
 
 
 
-## 15. Decisions that shaped the implementation
+## 15. Frontend architecture
+
+A Vite + React single-page app, built to `frontend/dist` and served as static files by
+FastAPI. Client-side routing means `/run/<id>` is a real URL — bookmarkable, shareable,
+and survivable across a refresh thanks to the SPA fallback route.
+
+### Layout
+
+A two-column shell: a sticky configurator on the left, the active view on the right.
+The sidebar collapses to a 56-pixel rail that keeps the run button and a status dot per
+run; the state persists in `localStorage`, as do the model and budget settings.
+
+### Two views
+
+**Overview** (`/`) — everything stored across all runs, filterable by whether a date was
+confirmed, plus the recurring programme registry, which is written on every save and
+had never been displayed before.
+
+**Run view** (`/run/<id>`) — one run, with its status, the four budget meters, the stage
+strip, and three tabs: Journey, Opportunities, Set aside. Everything here is scoped to
+that run, derived from its own journey rather than from `discovery_run_id`.
+
+### The journey view
+
+The centre of the application, and the part that has to make an agentic pipeline
+legible to somebody who will not read a Langfuse trace.
+
+Steps group into **stage passes** by graph node. Each pass states its purpose and shows
+its step count, duration, and problem count; a re-plan appears as a second pass rather
+than silently interleaving. Each step card shows its **intent** — what it was trying to
+do, independent of the result — and then its **reasoning** in a bordered callout: why
+this query, why this result was chosen, why these links, why pursue, why skip. The
+model's stated reasoning is the visually dominant element on the card, and turns red on
+failure.
+
+Every step also carries a **Raw event** block containing the untouched JSON, so no
+recorded field is unreachable from the interface, and `scrape` steps carry the fetched
+page content itself.
+
+A closing **Final output** card reports what the run produced — each stored
+opportunity with its deadline and its met / not met / your-call tally — so a run ends
+with an answer rather than trailing off after the last step.
+
+While a run is live, new steps animate in, the active pass is highlighted, and a dashed
+"working…" row sits at the end. That row deliberately does not name a step: a step is
+recorded only once it completes, so what is executing at any instant is genuinely
+unknown, and naming one would be a guess presented as fact.
+
+### Vocabulary
+
+The UI deliberately narrows the system's internal vocabularies. `unclear` and
+`qualitative` both render as **"Your call"**, because to a reader they mean the same
+thing. Eligibility `score` is computed and stored but **not** shown as a headline
+number — it misleads on multi-track programmes — and appears only inside a diagnostics
+disclosure with an explanation of why the per-condition verdicts are the thing to read.
+
+This narrowing is presentation only. §12 item 10 records that the underlying vocabulary
+sprawl across actionability, journey outcomes, run status and eligibility is still
+unreconciled in the data.
+
+---
+
+## 16. Decisions that shaped the implementation
 
 Each of these was a measured finding, not a preference.
 
@@ -909,7 +1147,7 @@ Each of these was a measured finding, not a preference.
 
 
 
-## 16. Open questions for Phase 2
+## 17. Open questions for Phase 2
 
 Not proposals — the decisions that need making, with the facts that bear on them.
 

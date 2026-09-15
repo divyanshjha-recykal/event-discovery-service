@@ -40,6 +40,10 @@ class OpportunityRecord(BaseModel):
     deadline_verified: bool = False
     event_date: str | None = None
     source_url: str
+    #: The model's own statement of what it was unsure about. Required by the
+    #: extraction schema and previously discarded here, so the one place the
+    #: model says "I was not certain" never reached anybody.
+    confidence_note: str | None = None
 
     @field_validator("cycle_year")
     @classmethod
