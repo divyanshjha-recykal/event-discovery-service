@@ -1,11 +1,4 @@
-/* "unclear" and "qualitative" both mean the same thing to a reader: a human
-   decides. One label, one bucket, nothing hidden. */
-const VERDICT = {
-  met: { label: 'Met', cls: 'met', order: 0 },
-  not_met: { label: 'Not met', cls: 'not_met', order: 1 },
-  unclear: { label: 'Your call', cls: 'unclear', order: 2 },
-  qualitative: { label: 'Your call', cls: 'unclear', order: 2 },
-}
+import { VERDICT } from '../api.js'
 
 export default function Opportunity({ o }) {
   const e = o.eligibility
@@ -90,7 +83,7 @@ export default function Opportunity({ o }) {
 
       {e && (
         <>
-          <table className="crit">
+          <table className="grid">
             <thead>
               <tr>
                 <th style={{ width: '42%' }}>Condition</th>
@@ -103,7 +96,7 @@ export default function Opportunity({ o }) {
                 <tr key={i}>
                   <td>{r.criterion}</td>
                   <td>
-                    <span className={`pill ${VERDICT[r.verdict]?.cls || 'muted'}`}>
+                    <span className={`tag ${VERDICT[r.verdict]?.cls || 'muted'}`}>
                       {VERDICT[r.verdict]?.label || r.verdict}
                     </span>
                   </td>
@@ -115,7 +108,7 @@ export default function Opportunity({ o }) {
           <p className="small muted" style={{ marginTop: 8 }}>
             {e.criteria_results.filter((r) => r.status === 'met').length} met ·{' '}
             {e.criteria_results.filter((r) => r.status === 'not_met').length} not met ·{' '}
-            {judgeCount} for you to judge
+            {judgeCount} need review
           </p>
           {(e.classification_flags || []).map((f, i) => <div className="flag" key={i}>{f}</div>)}
         </>

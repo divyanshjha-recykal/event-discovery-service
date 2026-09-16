@@ -16,7 +16,7 @@ search/scrape/model providers the pipeline already uses.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from ..config import MongoConfig
-from ..discovery import RunBudget, run_discovery
+from ..discovery import RunBudget, TraversalLimits, run_discovery
 from ..eligibility import evaluate_criteria, load_criteria_sets
 from ..paths import REPO_ROOT
 from ..profile import load_business_profile
@@ -56,6 +56,12 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(v) for v in value]
     if isinstance(value, datetime):
+        # PyMongo hands back naive datetimes even though Mongo stores UTC, and
+        # `new Date("...T12:51:22")` with no offset is parsed as LOCAL time —
+        # so an IST viewer saw every run 5h30m early. Mark it as UTC and let
+        # the browser convert.
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
         return value.isoformat()
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
@@ -149,6 +155,20 @@ def _read_journey(journey: list[dict]) -> dict[str, list[dict]]:
 
     for event in journey:
         url, tool, outcome = event.get("url"), event.get("tool"), event.get("outcome")
+
+        # Skips are decided by `analyze` and carried on its candidate list, not
+        # as rows of their own.
+        if tool == "analyze":
+            for candidate in event.get("candidates") or []:
+                if candidate.get("decision") == "skip" and candidate.get("url"):
+                    set_aside.append({
+                        "url": candidate["url"],
+                        "title": candidate.get("title"),
+                        "outcome": "not relevant",
+                        "reason": candidate.get("reason") or "not taken forward",
+                    })
+            continue
+
         if not url:
             continue
         if tool == "save_opportunity" and outcome == "ok":
@@ -173,7 +193,7 @@ def _read_journey(journey: list[dict]) -> dict[str, list[dict]]:
             set_aside.append({
                 "url": url,
                 "title": event.get("title"),
-                "outcome": outcome or "skipped",
+                "outcome": outcome or "not relevant",
                 "reason": event.get("reason") or "not taken forward",
             })
 
@@ -271,19 +291,35 @@ async def get_run_results(run_id: str) -> dict:
     read = _read_journey(run.get("journey") or [])
     ordered = list(dict.fromkeys(read["saved"]))
 
-    documents: dict[str, dict] = {}
+    # Keyed by identity, not by source_url. One page often carries several
+    # award tracks, each its own record on the same URL — keying by URL let
+    # siblings overwrite each other, so a run that stored three tracks showed
+    # one. Identity is `organizing_body + base_title + cycle_year`.
+    saved: list[dict] = []
+    seen_urls: set[str] = set()
     if ordered:
         async for doc in _db[OPPORTUNITIES].find({"source_url": {"$in": ordered}}):
-            documents[doc["source_url"]] = _jsonable(doc)
+            saved.append(_jsonable(doc))
+            seen_urls.add(doc["source_url"])
+
+    saved.sort(key=lambda d: (ordered.index(d["source_url"]), d.get("title") or ""))
 
     return {
         "run_id": run_id,
-        "saved": [documents[url] for url in ordered if url in documents],
+        "saved": saved,
         # Saved by this run but no longer in storage — the database was cleared
         # after the run. Reported rather than silently dropped.
-        "missing": [url for url in ordered if url not in documents],
+        "missing": [url for url in ordered if url not in seen_urls],
         "set_aside": read["set_aside"],
         "failures": read["failures"],
+        # The authoritative tallies, so the header and the tabs cannot disagree.
+        "totals": {
+            "ready": sum(1 for d in saved if d.get("record_state") != "needs_deeper_read"),
+            "needs_deeper": sum(
+                1 for d in saved if d.get("record_state") == "needs_deeper_read"
+            ),
+            "set_aside": len(read["set_aside"]) + len(read["failures"]),
+        },
     }
 
 
@@ -316,6 +352,12 @@ class RunConfig(BaseModel):
     max_scrapes: int = Field(default=14, ge=1, le=60)
     max_llm_calls: int = Field(default=16, ge=1, le=60)
     wall_clock_seconds: int = Field(default=900, ge=30, le=3600)
+    # How far research reaches. `max_depth` was inert until the traversal bug
+    # was fixed: link choice never ran below the seed whatever it was set to.
+    max_candidates: int = Field(default=5, ge=1, le=12)
+    max_links_per_page: int = Field(default=2, ge=0, le=6)
+    max_pages_per_seed: int = Field(default=3, ge=1, le=10)
+    max_depth: int = Field(default=1, ge=0, le=3)
     queries: list[str] = Field(default_factory=list)
     dry_run: bool = False
 
@@ -329,6 +371,14 @@ class RunConfig(BaseModel):
     @classmethod
     def _drop_blank_queries(cls, value: list[str]) -> list[str]:
         return [q.strip() for q in value if q and q.strip()]
+
+    def to_limits(self) -> TraversalLimits:
+        return TraversalLimits(
+            max_candidates=self.max_candidates,
+            max_links_per_page=self.max_links_per_page,
+            max_pages_per_seed=self.max_pages_per_seed,
+            max_depth=self.max_depth,
+        )
 
     def to_budget(self) -> RunBudget:
         return RunBudget(
@@ -353,6 +403,7 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
     """
     run_id = uuid4().hex
     budget = request.to_budget()
+    limits = request.to_limits()
     profile = load_business_profile()
 
     async def _go() -> None:
@@ -360,7 +411,7 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
         try:
             discovery = await run_discovery(
                 _db, queries=request.queries or None,
-                model=request.model, budget=budget,
+                model=request.model, budget=budget, limits=limits,
                 dry_run=request.dry_run, run_id=run_id,
             )
         except Exception as exc:  # noqa: BLE001
@@ -371,45 +422,17 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
             _ACTIVE.pop(run_id, None)
             return
 
-        # Eligibility is a separate stage and runs only on actionable records
-        # accepted by this Discovery run, never on stale records from old runs.
-        eligibility_failures: list[dict] = []
-        evaluated = 0
-        query = {"source_url": {"$in": discovery.saved}}
-        async for doc in _db[OPPORTUNITIES].find(query):
-            criteria = doc.get("eligibility_criteria") or []
-            completeness = doc.get("extraction_completeness") or {}
-            if not criteria or not completeness.get("eligibility", bool(criteria)):
-                eligibility_failures.append(
-                    {
-                        "source_url": doc.get("source_url"),
-                        "reason": "no sufficiently supported entry-eligibility criteria",
-                    }
-                )
-                continue
-            try:
-                result = await asyncio.to_thread(
-                    evaluate_criteria, criteria, profile.text,
-                    f"{doc.get('title')} — {doc.get('organizing_body')}", request.model,
-                )
-                await attach_eligibility(_db, doc["source_url"], result.model_dump())
-                evaluated += 1
-            except Exception as exc:  # noqa: BLE001
-                eligibility_failures.append(
-                    {
-                        "source_url": doc.get("source_url"),
-                        "reason": f"{type(exc).__name__}: {exc}",
-                    }
-                )
-                continue
-
+        # Feasibility now runs inside the graph, in finalize, per record. It
+        # used to run here — after the graph had returned — so a run reported
+        # "succeeded" before anything had been judged and a failure never
+        # appeared in the journey.
         await _db[RUNS].update_one(
             {"run_id": run_id},
             {
                 "$set": {
                     "eligibility_done": True,
-                    "eligibility_evaluated": evaluated,
-                    "eligibility_failures": eligibility_failures,
+                    "eligibility_evaluated": len(discovery.saved),
+                    "eligibility_failures": [],
                 }
             },
         )
@@ -440,6 +463,7 @@ async def start_discovery(request: RunRequest, background: BackgroundTasks) -> d
     """
     run_id = uuid4().hex
     budget = request.to_budget()
+    limits = request.to_limits()
 
     async def _go() -> None:
         _ACTIVE[run_id] = budget
@@ -449,6 +473,7 @@ async def start_discovery(request: RunRequest, background: BackgroundTasks) -> d
                 queries=request.queries or None,
                 model=request.model,
                 budget=budget,
+                limits=limits,
                 dry_run=request.dry_run,
                 run_id=run_id,
             )
@@ -486,7 +511,13 @@ async def run_eligibility(request: EligibilityRequest, background: BackgroundTas
                     f"{doc.get('title')} — {doc.get('organizing_body')}",
                     request.model,
                 )
-                await attach_eligibility(_db, doc["source_url"], result.model_dump())
+                await attach_eligibility(
+                    _db,
+                    result.model_dump(),
+                    organizing_body=doc["organizing_body"],
+                    base_title=doc["base_title"],
+                    cycle_year=doc["cycle_year"],
+                )
             except Exception:  # noqa: BLE001 — one bad record must not stop the rest
                 continue
 

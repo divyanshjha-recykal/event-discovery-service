@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import date
 from functools import partial
 from itertools import zip_longest
@@ -14,12 +15,22 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import discovery_temperature
-from ..extraction import ExtractionFailure, extract as extract_page, record_warnings
+from ..eligibility import evaluate_criteria
+from ..extraction import (
+    ExtractionFailure,
+    FailureReason,
+    build_record,
+    record_warnings,
+)
 from ..storage import (
     append_event,
+    attach_eligibility,
+    clear_dead_end,
     clear_extraction_failure,
+    dead_end_urls,
     due_soon,
     known_orgs,
+    record_dead_end,
     record_edition,
     record_extraction_failure,
     save_opportunity,
@@ -48,8 +59,8 @@ TOKENS_SHORTLIST = 3_000       # <=8 picks, each an int + 300 chars
 TOKENS_PLAN = 3_000            # 10 queries with rationales
 TOKENS_ANALYZE = 16_000        # full condition lists; schema maxes near 10,400
 
-# Four: with three, ET Sustainability Awards was in the pool, was judged by the
-# model, and lost the last slot to a more sector-exact pick. Raise with budget.
+# Traversal sizes now live on `runtime.limits`, set per run from the
+# configurator. These remain only as the fallback for callers without a runtime.
 MAX_RESEARCH_CANDIDATES = 4
 
 # Sized to hold every hit a run can produce (10 searches x 7 results), so
@@ -97,6 +108,17 @@ class _CandidateModel(BaseModel):
     source_url: str = Field(max_length=500)
     target_title: str = Field(max_length=200)
     category: Literal["award", "grant", "event", "conference"]
+    # The record's own values. Analyze reads the evidence once and produces the
+    # whole listing; a second model call re-reading the same pages to fill these
+    # in is what put six conditions and zero conditions on the same programme.
+    organizing_body: str = Field(max_length=200)
+    base_title: str = Field(max_length=200)
+    cycle_year: int
+    status: Literal["open", "closed", "unclear"]
+    submission_deadline: str | None = Field(default=None, max_length=32)
+    deadline_note: str | None = Field(default=None, max_length=200)
+    event_date: str | None = Field(default=None, max_length=32)
+    confidence_note: str = Field(default="", max_length=300)
     supporting_urls: list[Annotated[str, Field(max_length=500)]] = Field(
         max_length=3
     )
@@ -123,8 +145,13 @@ class _ShortlistPickModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Index into the numbered list, not a URL — a model cannot hallucinate an
-    # index that resolves to the wrong page.
+    # index that resolves to a page that was never offered.
     index: int
+    # It can still cite the wrong index. Observed live: a pick resolved to
+    # "SME Innovation Awards" while its reason described the Recommerce Expo,
+    # so a page nobody chose was fetched. Echoing the title back makes the
+    # mismatch detectable instead of silent.
+    title: str = Field(max_length=120)
     reason: str = Field(max_length=300)
 
 
@@ -228,14 +255,32 @@ async def _record(
 
 
 async def _memory(runtime: WorkflowRuntime) -> str:
+    """The whole business profile, plus what earlier runs already found.
+
+    The whole document, deliberately. This used to be a five-section
+    distillation — Identity, sector, geography, recognition history,
+    exclusions — which left out Technology, Certifications, Scale and both
+    impact sections. The stage that decides what to search for was therefore
+    told nothing about edge inference, the patent, the training set, the
+    altitude testing or the language support, and could not have written a
+    query about any of them.
+
+    Measured, the distillation saved about 1,500 tokens per read, roughly two
+    US cents a run. That is what it cost to make the planner unable to describe
+    the company it is searching on behalf of.
+    """
     orgs = await known_orgs(runtime.db)
     upcoming = await due_soon(runtime.db, lookahead_months=2)
     programs = "\n".join(
         f"- {item['organizing_body']} — {item['base_title']}"
         for item in upcoming
     ) or "(none due soon)"
+    # Deliberately NOT the full recorded list. Feeding every stored programme
+    # back into the prompt was meant to keep naming consistent; in practice it
+    # put the same programmes in front of the model run after run, and one it
+    # should have dropped kept reappearing because it was being shown.
     return (
-        f"{discovery_seed()}\n\nKnown organizing bodies: "
+        f"{runtime.profile_text or discovery_seed()}\n\nKnown organizing bodies: "
         f"{', '.join(orgs) if orgs else '(none)'}\n"
         f"Programs due soon:\n{programs}"
     )
@@ -306,9 +351,14 @@ async def plan_queries_node(
         sectors = ", ".join(facts["sectors"]) or "(profile states none)"
 
         primary = facts["geographies"][0] if facts["geographies"] else "global"
-        prompt = f"""Today is {today.isoformat()}. Find awards, prizes and
-recognition programmes this business could enter. Recognition, not funding —
-never search for grants, funding or fellowships.
+        prompt = f"""Today is {today.isoformat()}. Find awards, prizes,
+rankings, summits, conferences and forums this business could enter or take
+part in. Recognition and visibility, not funding — never search for grants,
+funding or fellowships.
+
+Do not search only for awards. A summit that invites speakers, a conference
+with a call for papers, and an industry forum with a showcase are all worth
+finding. Spread the ten queries across these kinds, not just award programmes.
 
 Sectors from the profile: {sectors}
 Primary market: {primary}
@@ -332,11 +382,26 @@ COVER DIFFERENT GROUND WITH EACH ONE. Ten wordings of a single idea is a wasted
 plan. Vary deliberately:
 - the field named: the profile's sectors, and also the broader fields they sit
   inside — sustainability, environment, climate, ESG, innovation, technology
+- the technical ground the profile describes. Read its Technology section and
+  search on what the engineering actually is, not only on the market it serves.
+  Capabilities, methods and research areas are named by a different set of
+  programmes than sectors are, and those programmes are invisible to a query
+  about the market. Name the discipline, never the product.
 - whether a year appears at all. Use {today.year} or {today.year + 1} in only
-  some of them, never a past year
-- the kind of recognition: awards, prize, honours, rankings, top companies
+  some of them, never a past year. Most queries should name no year: award
+  bodies publish next year's pages late, so a query naming a future year
+  mostly returns academic conference listings that advertise years ahead
+- the kind of recognition: awards, prize, honours, summits, conferences,
+  forums and expos
 - the kind of body that runs it: industry association, chamber of commerce,
   government, business publication. These run most awards in any market
+- technical and academic venues, one or two of the ten. Professional
+  engineering and computing bodies run conferences and workshops that take
+  submissions from industry, not only universities, and the Technology section
+  says whether this business has work they would accept — granted patents, a
+  labelled dataset, deployed models, measured results. Name the research field
+  the profile's own technology sits in and the venue type. Do not name a body:
+  which societies matter depends on the field, and the field is in the profile
 - the company stage: startup, emerging company, SME
 
 Rules:
@@ -435,9 +500,10 @@ programme, or is it writing about someone else's?
   Writing about someone else's -> skip. A dated article reporting who won, or a
   roundup listing many different programmes, is not a programme.
 
-Also skip: past or closed editions; programmes only for individuals, students or
-researchers; and grants, funding or fellowships — this business wants
-recognition, not money.
+Also skip: editions already finished — where the snippet names a date behind
+{today.isoformat()}, or reports winners; programmes only for individuals,
+students or researchers; and grants, funding or fellowships — this business
+wants recognition, not money.
 
 For each pick, the reason must say who the programme is open to, in a few words,
 from what the snippet actually shows. If it is limited to a country this business
@@ -448,6 +514,11 @@ take {want} of the same kind of award.
 
 You have only the title, URL and snippet. Where the snippet is thin, prefer a
 programme that clearly exists over a page that merely uses the right words.
+
+For every pick, copy the result's title into `title` exactly as it appears in
+the list, and make sure `index`, `title` and `reason` all describe that same
+result. A reason about a different result than the index points at means the
+wrong page is fetched.
 
 BUSINESS:
 {memory}
@@ -461,10 +532,33 @@ RESULTS:
     )
     chosen: list[tuple[object, str]] = []
     seen: set[int] = set()
+
+    def _words(text: str) -> set[str]:
+        return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 3}
+
     for pick in parsed.picks:
-        if 0 <= pick.index < len(pool) and pick.index not in seen:
-            seen.add(pick.index)
-            chosen.append((pool[pick.index], pick.reason))
+        if not (0 <= pick.index < len(pool)) or pick.index in seen:
+            continue
+        hit = pool[pick.index]
+
+        # The index and the echoed title must describe the same result. When
+        # they disagree the model mis-numbered, and following the index fetches
+        # a page it never meant to choose — so find the result it described.
+        claimed, actual = _words(pick.title), _words(hit.title)
+        if claimed and not (claimed & actual):
+            match = next(
+                (
+                    i for i, other in enumerate(pool)
+                    if i not in seen and len(claimed & _words(other.title)) >= 2
+                ),
+                None,
+            )
+            if match is None:
+                continue  # cannot tell what was meant — do not pay to guess
+            hit = pool[match]
+            seen.add(match)
+        seen.add(pick.index)
+        chosen.append((hit, pick.reason))
     return chosen
 
 
@@ -484,9 +578,11 @@ recognition programme you fetched this page:
 {page.url}
 {page.title}
 
-Below are links on the same site. Pick at most {MAX_LINKS_PER_PAGE} that most
+Below are links on the same site. Pick at most {runtime.limits.max_links_per_page} that most
 likely state entry eligibility, who can enter, entry requirements, categories,
-fees, or the entry deadline. Prefer a specific entry, eligibility or categories
+fees, or the entry deadline. A brochure, entry pack, guidelines or rules
+document counts — those are often where the conditions actually live, and a PDF
+is readable. Prefer a specific entry, eligibility or categories
 page over a general one. Skip winners, past editions, news, sponsors, contact,
 login and social pages. Return an empty list if none are worth fetching.
 
@@ -504,7 +600,7 @@ LINKS:
         )
         picked = [
             candidates[index][0]
-            for index in parsed.indexes[:MAX_LINKS_PER_PAGE]
+            for index in parsed.indexes[:runtime.limits.max_links_per_page]
             if 0 <= index < len(candidates)
         ]
         await _record(
@@ -582,9 +678,31 @@ async def research_node(
             if url in seen_urls:
                 continue
             seen_urls.add(url)
-            ordered.append(type(hit)(hit.title, url, hit.snippet, hit.query, 0.0))
+            ordered.append(
+                type(hit)(hit.title, url, hit.snippet, hit.query,
+                          hit.score, hit.content)
+            )
 
-    ranked = [hit for hit in ordered if hit.url not in existing_seeds]
+    # Sites that earlier runs fetched and found nothing usable on. Dropped here
+    # rather than shown to the model, so neither the tokens nor the scrape are
+    # paid for again. Only after two empty visits, so one bad run cannot ban a
+    # programme whose cycle had simply not opened yet.
+    try:
+        known_dead = await dead_end_urls(runtime.db)
+    except Exception:  # noqa: BLE001 — memory is an optimisation, never a gate
+        known_dead = set()
+
+    ranked = [
+        hit for hit in ordered
+        if hit.url not in existing_seeds and hit.url not in known_dead
+    ]
+    if known_dead:
+        skipped_dead = sum(1 for hit in ordered if hit.url in known_dead)
+        if skipped_dead:
+            await _record(
+                runtime, "memory", node="research", outcome="ok",
+                detail=f"skipped {skipped_dead} URL(s) earlier runs found empty",
+            )
 
     # The model chooses what to research; search-engine order only sets the order
     # of the pool it sees. Ordering is the fallback, never the gate.
@@ -593,7 +711,7 @@ async def research_node(
         try:
             runtime.budget.consume("shortlist")
             picks = await _shortlist(
-                ranked, state["memory"], today, runtime, MAX_RESEARCH_CANDIDATES
+                ranked, state["memory"], today, runtime, runtime.limits.max_candidates
             )
             await _record(
                 runtime, "shortlist", node="research", outcome="ok",
@@ -617,7 +735,7 @@ async def research_node(
     choose_links = None if runtime.dry_run else _link_chooser(runtime, today)
     added = 0
     for hit, reason in picks:
-        if hit.url in existing_seeds or added >= MAX_RESEARCH_CANDIDATES:
+        if hit.url in existing_seeds or added >= runtime.limits.max_candidates:
             continue
         if runtime.budget.remaining <= MIN_CALLS_AFTER_RESEARCH:
             break
@@ -638,20 +756,46 @@ def _bundle_prompt(bundle: EvidenceBundle, today: str, memory: str) -> str:
     return f"""Today is {today}. These pages were fetched from one site while
 researching recognition programmes. Identify the distinct opportunities on it.
 
-An event and an award on the same site are different entities. Prefer the
-umbrella programme over one of its categories when they share an entry process;
-emit a separate track only when it is entered independently and has materially
-different entry eligibility.
+An event and an award on the same site are different entities.
 
-Decide pursue or skip for each. Pursue only a programme that is currently open
-or currently actionable. Skip: past editions; closed entry windows; programmes
-whose stated eligibility excludes a company (student-only, individual-only,
-researcher-only); and grant, funding or fellowship programmes, because this
-business wants recognition, not money. Do not skip because one category fits
-poorly when another category is a realistic route.
+ONE PROGRAMME, ONE ENTRY. If several categories share one entry process, one
+entry form, one deadline and one set of conditions, they are categories of a
+single programme — emit ONE candidate for the umbrella programme and name the
+categories in its reason. Emit separate candidates only when each is entered
+independently, with its own conditions. Three candidates pointing at the same
+URL with the same single condition is the mistake this rule exists to prevent.
+
+Decide pursue or skip for each, answering two questions in this order.
+
+1. IS IT AHEAD OF US? Pursue anything whose next edition is still to come, even
+   if entry has not opened yet and no dates are announced. A programme that says
+   "express interest" or names only a future event date is exactly what this is
+   for — knowing about it early is the point. Skip ONLY when the edition has
+   demonstrably passed or its entry window has demonstrably closed.
+
+2. IS IT FOR A BUSINESS LIKE OURS? Read the BUSINESS block and ask whether an
+   organisation of this kind could plausibly be the entrant. Skip a programme
+   whose entrants are a different kind of party altogether — designers,
+   students, individuals, researchers, universities, or a sector this business
+   does not operate in — however well the words match. Judge the entrant it
+   wants, not the topic it covers.
+
+Also skip grant, funding and fellowship programmes: this business wants
+recognition, not money. Do not skip because one category fits poorly when
+another category is a realistic route.
 
 Emit at least one decision per seed bundle — use skip when the site holds no
 relevant opportunity.
+
+For every opportunity you pursue, also give its own values, read from the page:
+organizing_body (the body that runs it, not the sponsor or venue), base_title
+(the title with year and edition markers stripped and nothing else), cycle_year
+(the year of THIS edition), status ("open", "closed" or "unclear"),
+submission_deadline and event_date as "YYYY-MM-DD" or null, deadline_note when
+the deadline is rolling or relative, and confidence_note for anything you were
+unsure about. Use only what the pages say — never infer a deadline that is not
+written there. The deadline's year may be taken from the page title or its
+publication date when the deadline itself gives only a day and month.
 
 ENTRY ELIGIBILITY is the heart of this. List every stated condition an entrant
 must satisfy, each as its own item, in the words the page uses. Do not
@@ -701,6 +845,14 @@ async def _analyze_bundle(
                 supporting_urls=supporting,
                 decision=item.decision,
                 reason=item.reason,
+                organizing_body=item.organizing_body,
+                base_title=item.base_title,
+                cycle_year=item.cycle_year,
+                status=item.status,
+                submission_deadline=item.submission_deadline,
+                deadline_note=item.deadline_note,
+                event_date=item.event_date,
+                confidence_note=item.confidence_note,
                 entry_eligibility=tuple(item.entry_eligibility),
                 judging_criteria=tuple(item.judging_criteria),
                 application_requirements=tuple(item.application_requirements),
@@ -854,6 +1006,9 @@ async def finalize_node(
 
     for candidate in state["candidates"]:
         if candidate.decision == "skip":
+            # Recorded by `analyze`, which made the decision. Re-logging it here
+            # put the same skip under `finalize` as well, so a stage that never
+            # touched the candidate appeared to have rejected it.
             rejected.append(
                 {
                     "url": candidate.source_url,
@@ -862,32 +1017,14 @@ async def finalize_node(
                     "stage": "analysis",
                 }
             )
-            await _record(
-                runtime,
-                "skip",
-                node="finalize",
-                url=candidate.source_url,
-                title=candidate.target_title,
-                outcome="skipped",
-                reason=candidate.reason,
-            )
             continue
 
         bundle = bundles.get(candidate.seed_url)
         if bundle is None:
             continue
-        refusal = runtime.budget.refusal("extract")
-        if refusal:
-            rejected.append(
-                {
-                    "url": candidate.source_url,
-                    "title": candidate.target_title,
-                    "reason": refusal,
-                    "stage": "budget",
-                }
-            )
-            continue
-        runtime.budget.consume("extract")
+        # No budget check: building the record is now pure validation over what
+        # analyze already produced. Refusing it at zero budget would throw away
+        # the search and the scrape that were already paid for.
         canonical_page = next(
             (page for page in bundle.pages if page.url == candidate.source_url),
             bundle.pages[0],
@@ -896,19 +1033,36 @@ async def finalize_node(
             candidate.supporting_urls,
             candidate.source_url,
         )
-        result = await asyncio.to_thread(
-            extract_page,
+        # No second model call. Analyze already read this evidence and produced
+        # the listing; this validates it into a record — edition strip on the
+        # identity key, deadline grounded against the source text, pydantic
+        # validation, typed failures. All the parts that were never the model's
+        # to decide, and none of the parts it had already decided once.
+        result = build_record(
+            {
+                "status": candidate.status,
+                "title": candidate.target_title,
+                "organizing_body": candidate.organizing_body,
+                "base_title": candidate.base_title,
+                "cycle_year": candidate.cycle_year,
+                "category": candidate.category,
+                "submission_deadline": candidate.submission_deadline,
+                "deadline_note": candidate.deadline_note,
+                "event_date": candidate.event_date,
+                "confidence_note": candidate.confidence_note,
+            },
             evidence_text,
             candidate.source_url,
-            runtime.model,
             canonical_page.title,
-            canonical_page.description,
-            candidate.target_title,
         )
         if isinstance(result, ExtractionFailure):
-            runtime.failures.append(
-                f"{candidate.source_url}: {result.reason.value}"
-            )
+            # `opportunity_closed` is the pipeline working: the page said entry
+            # has closed and we believed it. Counting it as a run failure made
+            # a run that correctly identified four past cycles report "Failed".
+            if result.reason is not FailureReason.OPPORTUNITY_CLOSED:
+                runtime.failures.append(
+                    f"{candidate.source_url}: {result.reason.value}"
+                )
             await record_extraction_failure(
                 runtime.db,
                 candidate.source_url,
@@ -928,6 +1082,15 @@ async def finalize_node(
                 detail=result.detail[:300],
             )
             continue
+
+        # Analyze read the evidence and listed the entry conditions; extract
+        # pulls the record's own values off the page. One read produces the
+        # conditions, not two. Extract used to re-derive them from the same
+        # bundle and overwrite analyze's answer with a worse one — on one run
+        # analyze found six conditions for the ET awards and extract found none.
+        result = result.model_copy(
+            update={"eligibility_criteria": list(candidate.entry_eligibility)}
+        )
 
         completeness = assess_completeness(
             result,
@@ -975,9 +1138,12 @@ async def finalize_node(
                     "status": actionability.status,
                 }
             )
-            if (
-                actionability.status == "historical"
-                and result.submission_deadline
+            # Any date at all is worth recording. Requiring a submission
+            # deadline meant a programme that published only an event date
+            # taught the registry nothing — two ICEF editions were lost that
+            # way in one run, along with the August window they implied.
+            if actionability.status == "historical" and (
+                result.submission_deadline or result.event_date
             ):
                 await record_edition(
                     runtime.db,
@@ -985,6 +1151,7 @@ async def finalize_node(
                     result.base_title,
                     result.cycle_year,
                     result.submission_deadline,
+                    result.event_date,
                 )
                 runtime.historical.append(candidate.source_url)
             await _record(
@@ -998,9 +1165,15 @@ async def finalize_node(
             )
             continue
 
+        # A record with no entry conditions is real but not yet usable: the
+        # eligibility stage has nothing to judge, so counting it as the run's
+        # product overstates what was found. Stored, flagged, counted apart.
+        usable = bool(result.eligibility_criteria)
         payload = result.model_dump()
         payload.update(
             {
+                "record_state": "ready" if usable else "needs_deeper_read",
+                "unfollowed_links": list(bundle.unfollowed[:20]),
                 "actionability": "actionable",
                 "evidence_urls": bundle.source_urls,
                 "extraction_completeness": completeness.as_dict(),
@@ -1018,7 +1191,17 @@ async def finalize_node(
             payload["dry_run"] = True
             payload["synthetic"] = "DRY-RUN FIXTURE — not a real opportunity"
         saved = await save_opportunity(runtime.db, payload)
-        runtime.saved.append(candidate.source_url)
+        if usable:
+            runtime.saved.append(candidate.source_url)
+            await clear_dead_end(runtime.db, candidate.source_url)
+        else:
+            runtime.needs_deeper.append(candidate.source_url)
+            await record_dead_end(
+                runtime.db,
+                candidate.source_url,
+                "fetched and extracted, but the page states no entry conditions",
+                result.title,
+            )
         # Computed once and carried onto the event too: these say why a stored
         # record should still be treated with care, and were previously only
         # ever reachable in memory.
@@ -1027,6 +1210,43 @@ async def finalize_node(
             f"{candidate.source_url}: {warning}" for warning in warnings
         )
         await clear_extraction_failure(runtime.db, candidate.source_url)
+
+        # Feasibility against the business profile, inside the graph. It used to
+        # run in the API after the graph returned, which meant the run reported
+        # "succeeded" before anything had been judged, and a failure here was
+        # invisible in the journey. Free of the budget, like saving: it only
+        # ever runs on a record already paid for.
+        if usable:
+            try:
+                verdict = await asyncio.to_thread(
+                    evaluate_criteria,
+                    list(result.eligibility_criteria),
+                    runtime.profile_text,
+                    f"{result.title} — {result.organizing_body}",
+                    runtime.model,
+                )
+                await attach_eligibility(
+                    runtime.db,
+                    verdict.model_dump(),
+                    organizing_body=result.organizing_body,
+                    base_title=result.base_title,
+                    cycle_year=result.cycle_year,
+                )
+                await _record(
+                    runtime, "feasibility", node="finalize",
+                    url=candidate.source_url, title=result.title, outcome="ok",
+                    counts=verdict.counts, confidence=verdict.confidence,
+                    qualitative=len(verdict.qualitative_notes),
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad verdict must not stop the run
+                detail = f"{type(exc).__name__}: {exc}"[:300]
+                runtime.failures.append(f"feasibility {candidate.source_url}: {detail}")
+                await _record(
+                    runtime, "feasibility", node="finalize",
+                    url=candidate.source_url, title=result.title,
+                    outcome="failed", detail=detail,
+                )
+
         await _record(
             runtime,
             "save_opportunity",

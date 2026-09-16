@@ -111,8 +111,8 @@ async def resolve_evidence_bundle(
     runtime: WorkflowRuntime,
     record_event: Callable[..., Awaitable[None]],
     *,
-    max_depth: int = 2,
-    max_pages: int = 3,
+    max_depth: int | None = None,
+    max_pages: int | None = None,
     reserve_calls: int = 3,
     choose_links: Callable[..., Awaitable[list[str]]] | None = None,
 ) -> EvidenceBundle:
@@ -120,8 +120,13 @@ async def resolve_evidence_bundle(
 
     When `choose_links` is absent or fails we follow nothing rather than guess.
     """
+    limits = runtime.limits
+    max_depth = limits.max_depth if max_depth is None else max_depth
+    max_pages = limits.max_pages_per_seed if max_pages is None else max_pages
+
     pages: list[EvidencePage] = []
     seen: set[str] = set()
+    unfollowed: set[str] = set()
     seed_url = canonicalize_url(hit.url)
     queue: deque[tuple[str, int]] = deque([(seed_url, 0)])
 
@@ -197,11 +202,14 @@ async def resolve_evidence_bundle(
         candidates = [
             item for item in _candidate_links(page, seed_url) if item[0] not in seen
         ]
-        if not candidates or choose_links is None or depth > 0:
+        if not candidates or choose_links is None:
             continue
 
-        # Only the seed gets a model call. If the model cannot choose, follow
-        # nothing: the seed page alone beats a keyword guess at which link matters.
+        # Link choice runs at every depth below max_depth. A `depth > 0` guard
+        # here used to stop it after the seed, which made max_depth dead: real
+        # depth was always 1 whatever it was set to.
+        # If the model cannot choose, follow nothing — the pages already fetched
+        # beat a keyword guess at which link matters.
         followed: list[str] = []
         try:
             followed = await choose_links(page, candidates[:40])
@@ -211,9 +219,14 @@ async def resolve_evidence_bundle(
                 outcome="failed", detail=f"{type(exc).__name__}: {exc}"[:200],
             )
         followed = followed[: max_pages - len(pages)]
+        unfollowed.update(url for url, _ in candidates if url not in followed)
 
         for link in followed:
             if link not in seen:
                 queue.append((link, depth + 1))
 
-    return EvidenceBundle(seed_url=seed_url, pages=tuple(pages))
+    return EvidenceBundle(
+        seed_url=seed_url,
+        pages=tuple(pages),
+        unfollowed=tuple(url for url in unfollowed if url not in seen),
+    )

@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from datetime import date
 from uuid import uuid4
 
+from ..profile import load_business_profile
 from ..storage import finish_run, start_run
 from ..tracing import langfuse_client, trace_handler
 from .budget import RunBudget
-from .state import DiscoveryState, WorkflowRuntime
+from .state import DiscoveryState, TraversalLimits, WorkflowRuntime
 from .workflow import build_discovery_graph
 
 
@@ -19,6 +20,7 @@ class DiscoveryRun:
     model: str
     budget: RunBudget
     saved: list[str]
+    needs_deeper: list[str]
     auto_saved: list[str]
     failures: list[str]
     warnings: list[str]
@@ -39,9 +41,11 @@ async def run_discovery(
     budget: RunBudget | None = None,
     dry_run: bool = False,
     run_id: str | None = None,
+    limits: TraversalLimits | None = None,
 ) -> DiscoveryRun:
     """Run Plan -> Research -> Analyze -> Finalize without free-form tool control."""
     budget = budget or RunBudget()
+    limits = limits or TraversalLimits()
     run_id = run_id or uuid4().hex
     label = model or "(OPENROUTER_MODEL)"
     runtime = WorkflowRuntime(
@@ -50,6 +54,8 @@ async def run_discovery(
         model=model,
         dry_run=dry_run,
         run_id=run_id,
+        limits=limits,
+        profile_text=load_business_profile().text,
     )
 
     try:
@@ -57,7 +63,14 @@ async def run_discovery(
             db,
             run_id,
             label,
-            {**budget.caps(), "workflow": "plan-research-analyze-finalize"},
+            {
+                **budget.caps(),
+                "max_candidates": limits.max_candidates,
+                "max_links_per_page": limits.max_links_per_page,
+                "max_pages_per_seed": limits.max_pages_per_seed,
+                "max_depth": limits.max_depth,
+                "workflow": "plan-research-analyze-finalize",
+            },
             queries,
         )
     except Exception:  # noqa: BLE001
@@ -79,7 +92,7 @@ async def run_discovery(
     }
     result: DiscoveryState = initial
     trace_url: str | None = None
-    status = "completed"
+    status = "succeeded"
 
     client = langfuse_client()
     with client.start_as_current_observation(
@@ -98,10 +111,13 @@ async def run_discovery(
                     "recursion_limit": 10,
                 },
             )
-            if runtime.failures and not runtime.saved:
+            # A run either worked or it did not. "Completed with rejections"
+            # read as a qualified failure when setting a candidate aside is
+            # normal, successful behaviour.
+            if budget.cancelled:
+                status = "stopped"
+            elif runtime.failures and not (runtime.saved or runtime.needs_deeper):
                 status = "failed"
-            elif result.get("rejected") or runtime.failures:
-                status = "completed_with_rejections"
         except Exception as exc:  # noqa: BLE001
             runtime.failures.append(f"workflow: {type(exc).__name__}: {exc}")
             result = {**initial, "summary": f"RUN ENDED EARLY: {type(exc).__name__}: {exc}"}
@@ -130,6 +146,7 @@ async def run_discovery(
         "extracted": extracted,
         "extraction_failed": extraction_failed,
         "saved": len(runtime.saved),
+        "needs_deeper": len(runtime.needs_deeper),
         "failed": len(runtime.failures),
         "rejected": len(result.get("rejected", [])),
         "historical": len(runtime.historical),
@@ -150,6 +167,10 @@ async def run_discovery(
                 # field, so omitting them left the UI metering against zero.
                 **budget.caps(),
                 **budget.live(),
+                "max_candidates": limits.max_candidates,
+                "max_links_per_page": limits.max_links_per_page,
+                "max_pages_per_seed": limits.max_pages_per_seed,
+                "max_depth": limits.max_depth,
                 "stop_reason": budget.stop_reason,
                 "workflow": "plan-research-analyze-finalize",
             },
@@ -166,6 +187,7 @@ async def run_discovery(
         model=label,
         budget=budget,
         saved=list(runtime.saved),
+        needs_deeper=list(runtime.needs_deeper),
         auto_saved=[],
         failures=list(runtime.failures),
         warnings=list(runtime.warnings),

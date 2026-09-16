@@ -44,6 +44,7 @@ class RunBudget:
     llm_calls: int = 0
     started_at: float = field(default_factory=time.monotonic)
     stop_reason: str | None = None
+    cancelled: bool = False
     log: list[str] = field(default_factory=list)
 
     # -- queries ------------------------------------------------------------
@@ -121,12 +122,13 @@ class RunBudget:
     # the best one because the budget ran out on the save, one call after the
     # expensive work was already paid for.
     FREE_TOOLS = frozenset({"read_memory", "save_opportunity"})
-    LLM_TOOLS = frozenset(
-        {"plan", "shortlist", "select_links", "analyze", "extract"}
-    )
+    # "extract" is gone: analyze now produces the listing and building the
+    # record is pure validation, so there is no second model call to cap.
+    LLM_TOOLS = frozenset({"plan", "shortlist", "select_links", "analyze"})
 
     def cancel(self, reason: str = "stopped by the operator") -> None:
         """Stop the run at its next tool call. Saves still go through."""
+        self.cancelled = True
         self.stop_reason = self.stop_reason or reason
         self.log.append(f"  --. CANCELLED: {reason} (t+{self.elapsed:.0f}s)")
 
@@ -157,6 +159,7 @@ class RunBudget:
             "scrapes": self.scrapes,
             "llm_calls": self.llm_calls,
             "elapsed": round(self.elapsed, 1),
+            "cancelled": self.cancelled,
         }
 
     def caps(self) -> dict[str, int]:

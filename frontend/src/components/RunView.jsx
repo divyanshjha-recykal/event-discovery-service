@@ -1,17 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { api, runLabel, shortId, STAGES, STAGE_OF } from '../api.js'
+import { api, outcome as outcomeOf, runLabel, runStatus, shortId, STAGES, STAGE_OF } from '../api.js'
 import { IconExternal, IconStop } from '../icons.jsx'
 import ExportPanel from './ExportPanel.jsx'
 import Journey from './Journey.jsx'
 import Opportunity from './Opportunity.jsx'
-
-const STATUS_CLASS = {
-  completed: 'met',
-  completed_with_rejections: 'met',
-  running: 'unclear',
-  failed: 'not_met',
-}
 
 function Stages({ run, events }) {
   const reached = new Set(events.map((e) => STAGE_OF[e.tool]).filter(Boolean))
@@ -57,7 +50,7 @@ function SetAside({ results }) {
   ]
   if (!rows.length) return <p className="muted tight">Nothing was set aside in this run.</p>
   return (
-    <table className="crit">
+    <table className="grid">
       <thead>
         <tr>
           <th style={{ width: '44%' }}>Page</th>
@@ -73,8 +66,8 @@ function SetAside({ results }) {
               <a className="u mono small" href={r.url} target="_blank" rel="noreferrer">{r.url}</a>
             </td>
             <td>
-              <span className={`pill ${r.kind ? 'not_met' : 'muted'}`}>
-                {r.kind || r.outcome}
+              <span className={`tag ${outcomeOf(r.kind || r.outcome).cls}`}>
+                {outcomeOf(r.kind || r.outcome).label}
               </span>
             </td>
             <td className="why">{r.reason || r.detail}</td>
@@ -162,23 +155,31 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
   const b = run.budget || {}
   const counts = run.counts || {}
   const saved = results?.saved || []
+  // One source of truth. The header used to count save operations while the
+  // tabs counted stored records, so a run showed "5 ready" above "Results (3)".
+  const totals = results?.totals || {
+    ready: counts.saved ?? 0,
+    needs_deeper: counts.needs_deeper ?? 0,
+    set_aside: counts.rejected ?? 0,
+  }
+  const ready = saved.filter((o) => o.record_state !== 'needs_deeper_read')
+  const thin = saved.filter((o) => o.record_state === 'needs_deeper_read')
 
   return (
     <>
       <div className="run-head">
         <div className="run-title">
           <div className="row">
-            <span className={`pill ${STATUS_CLASS[run.status] || 'muted'}`}>
-              {running ? 'running' : run.status}
+            <span className={`tag ${runStatus(running ? 'running' : run.status).cls}`}>
+              {runStatus(running ? 'running' : run.status).label}
             </span>
             <h2>{runLabel(run)}</h2>
             <span className="mono small muted">{shortId(run.run_id)}</span>
           </div>
           <div className="row small muted" style={{ marginTop: 4 }}>
-            <span>{counts.saved ?? 0} saved</span>
-            <span>{counts.extracted ?? 0} extracted</span>
-            <span>{counts.rejected ?? 0} set aside</span>
-            <span>{counts.failed ?? 0} failures</span>
+            <span>{totals.ready} ready</span>
+            <span>{totals.needs_deeper} need a deeper read</span>
+            <span>{totals.set_aside} set aside</span>
             {b.elapsed != null && <span>{Math.round(b.elapsed)}s in discovery</span>}
             {/* Wall time covers eligibility too, which runs after the budget stops. */}
             {run.finished_at && run.started_at && (
@@ -235,8 +236,12 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
       <div className="tabs">
         {[
           ['journey', `Journey (${events.length})`],
-          ['opportunities', `Opportunities (${saved.length})`],
-          ['aside', `Set aside (${(results?.set_aside || []).length + (results?.failures || []).length})`],
+          // Results means "you can act on this". A record with no entry
+          // conditions is an unfinished lead, not a result, and mixing the two
+          // invites the obvious question: why are you showing me this?
+          ['opportunities', `Results (${totals.ready})`],
+          ['thin', `Needs more evidence (${totals.needs_deeper})`],
+          ['aside', `Set aside (${totals.set_aside})`],
         ].map(([key, label]) => (
           <button key={key} type="button"
                   className={`tab${tab === key ? ' on' : ''}`}
@@ -248,13 +253,15 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
 
       <div className="card">
         {tab === 'journey' && (
-          <Journey run={run} events={events} saved={saved} live={running} />
+          <Journey run={run} events={events} saved={ready} thin={thin} live={running} />
         )}
 
         {tab === 'opportunities' && (
-          saved.length ? (
+          ready.length ? (
             <>
-              {saved.map((o) => <Opportunity key={o.source_url} o={o} />)}
+              {ready.map((o) => (
+                <Opportunity key={`${o.source_url}-${o.base_title}`} o={o} />
+              ))}
               {!!(results?.missing || []).length && (
                 <p className="small muted">
                   {results.missing.length} record(s) this run saved are no longer in
@@ -264,7 +271,29 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
             </>
           ) : (
             <p className="muted tight">
-              {running ? 'Nothing saved yet.' : 'This run saved no opportunities.'}
+              {running
+                ? 'Nothing ready yet.'
+                : 'No opportunity from this run had entry conditions to judge.'}
+            </p>
+          )
+        )}
+
+        {tab === 'thin' && (
+          thin.length ? (
+            <>
+              <p className="small muted" style={{ marginTop: 0 }}>
+                Real programmes found on their organiser&rsquo;s own site, but the
+                pages we read state no entry conditions — so there was nothing to
+                judge against the profile. Worth opening the source page, or
+                re-running with a greater reach.
+              </p>
+              {thin.map((o) => (
+                <Opportunity key={`${o.source_url}-${o.base_title}`} o={o} />
+              ))}
+            </>
+          ) : (
+            <p className="muted tight">
+              Every opportunity this run found had entry conditions to judge.
             </p>
           )
         )}

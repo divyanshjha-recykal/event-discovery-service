@@ -57,23 +57,32 @@ async def save_opportunity(db: AsyncDatabase, record: dict) -> SaveResult:
             base_title=record["base_title"],
             year=record["cycle_year"],
             deadline=record.get("submission_deadline"),
+            event_date=record.get("event_date"),
         )
 
     return SaveResult(document=document, inserted=inserted)
 
 
 async def attach_eligibility(
-    db: AsyncDatabase, source_url: str, result: dict
+    db: AsyncDatabase,
+    result: dict,
+    *,
+    organizing_body: str,
+    base_title: str,
+    cycle_year: int,
 ) -> dict | None:
     """Store an eligibility verdict on its opportunity record.
 
-    CLAUDE.md's schema puts the eligibility result on the opportunity itself
-    rather than in its own collection, so Stage 5 can read an opportunity and
-    its verdict together. Keyed on source_url because that is what the caller
-    holds after evaluating a stored record.
+    Keyed on the identity, not on `source_url`. One page routinely carries
+    several programmes — three records once shared a single awards page — and
+    `find_one_and_update` on a non-unique key updates exactly one of them. The
+    verdict landed on whichever matched first, so two records showed "no entry
+    conditions" while holding four each, and the third was given a verdict
+    computed from someone else's conditions.
     """
+    identity = opportunity_identity(organizing_body, base_title, cycle_year)
     return await db[OPPORTUNITIES].find_one_and_update(
-        {"source_url": source_url},
+        identity,
         {"$set": {"eligibility": result, "eligibility_evaluated_at": datetime.now(timezone.utc)}},
         return_document=ReturnDocument.AFTER,
     )

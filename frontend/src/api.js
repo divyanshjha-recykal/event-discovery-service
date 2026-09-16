@@ -11,8 +11,50 @@ export const api = async (path, options) => {
   return res.json()
 }
 
-// The graph's nodes in execution order, and which node each journey event
-// belongs to — progress is inferred from the journey rather than reported.
+/* ------------------------------------------------------------ vocabulary --
+   Three sets of words, and no others. The pipeline's internal identifiers are
+   mapped here rather than renamed, so runs recorded before this still read
+   correctly.                                                                */
+
+/** A run either worked or it did not. */
+export const RUN_STATUS = {
+  succeeded: { label: 'Succeeded', cls: 'ok' },
+  failed: { label: 'Failed', cls: 'bad' },
+  running: { label: 'Running', cls: 'live' },
+  stopped: { label: 'Stopped', cls: 'warn' },
+  // Recorded by earlier versions.
+  completed: { label: 'Succeeded', cls: 'ok' },
+  completed_with_rejections: { label: 'Succeeded', cls: 'ok' },
+}
+
+export const runStatus = (status) =>
+  RUN_STATUS[status] || { label: status || 'unknown', cls: 'muted' }
+
+/** What became of one page or candidate. */
+export const OUTCOME = {
+  saved: { label: 'Saved', cls: 'ok' },
+  needs_deeper_read: { label: 'Needs deeper read', cls: 'warn' },
+  'not relevant': { label: 'Not relevant', cls: 'muted' },
+  historical: { label: 'Closed or passed', cls: 'muted' },
+  reject: { label: 'Closed or passed', cls: 'muted' },
+  'could not fetch': { label: "Couldn't read", cls: 'bad' },
+  'not pursued': { label: 'Not relevant', cls: 'muted' },
+  'extraction failed': { label: "Couldn't read", cls: 'bad' },
+}
+
+export const outcome = (key) =>
+  OUTCOME[key] || { label: key || 'unknown', cls: 'muted' }
+
+/** One eligibility condition. */
+export const VERDICT = {
+  met: { label: 'Met', cls: 'ok', order: 0 },
+  not_met: { label: 'Not met', cls: 'bad', order: 1 },
+  unclear: { label: 'Needs review', cls: 'warn', order: 2 },
+  qualitative: { label: 'Needs review', cls: 'warn', order: 2 },
+}
+
+/* ----------------------------------------------------------------- stages */
+
 export const STAGES = ['plan', 'research', 'analyze', 'finalize']
 
 export const STAGE_OF = {
@@ -21,20 +63,28 @@ export const STAGE_OF = {
   shortlist: 'research',
   select_links: 'research',
   scrape: 'research',
+  memory: 'research',
   analyze: 'analyze',
   extract: 'finalize',
   save_opportunity: 'finalize',
+  feasibility: 'finalize',
   actionability: 'finalize',
   skip: 'finalize',
 }
 
+/* ----------------------------------------------------------------- config */
+
 export const DEFAULT_CONFIG = {
   model: '',
-  budget: 40,
-  max_searches: 12,
-  max_scrapes: 14,
-  max_llm_calls: 16,
+  budget: 60,
+  max_searches: 15,
+  max_scrapes: 20,
+  max_llm_calls: 22,
   wall_clock_seconds: 900,
+  max_candidates: 5,
+  max_links_per_page: 2,
+  max_pages_per_seed: 3,
+  max_depth: 1,
   queries: '',
 }
 
@@ -60,9 +110,21 @@ export const toRequest = (config, dryRun) => ({
   max_scrapes: Number(config.max_scrapes),
   max_llm_calls: Number(config.max_llm_calls),
   wall_clock_seconds: Number(config.wall_clock_seconds),
+  max_candidates: Number(config.max_candidates),
+  max_links_per_page: Number(config.max_links_per_page),
+  max_pages_per_seed: Number(config.max_pages_per_seed),
+  max_depth: Number(config.max_depth),
   queries: config.queries.split('\n').map((q) => q.trim()).filter(Boolean),
   dry_run: dryRun,
 })
+
+/** Worst-case calls one pass costs, so the knobs show their price. */
+export const estimateCalls = (c) => {
+  const seeds = Number(c.max_candidates)
+  const perSeed = Number(c.max_pages_per_seed)
+  const linkCalls = Number(c.max_depth) > 0 ? seeds * Number(c.max_depth) : 0
+  return 1 + 10 + 1 + linkCalls + seeds * perSeed + seeds + seeds
+}
 
 export const shortId = (id) => (id || '').slice(0, 6)
 

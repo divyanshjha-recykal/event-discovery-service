@@ -71,3 +71,47 @@ async def failure_counts(db: AsyncDatabase) -> dict[str, int]:
         reason = doc.get("reason", "unknown")
         counts[reason] = counts.get(reason, 0) + 1
     return counts
+
+
+# --- dead ends -------------------------------------------------------------
+#
+# A page that was fetched successfully and yielded nothing usable is not a
+# failure — it is a site we now know is not worth paying for again. Recording
+# them is what stops a run rediscovering the same empty page every time.
+
+DEAD_ENDS = "dead_ends"
+
+
+async def ensure_dead_end_indexes(db: AsyncDatabase) -> None:
+    await db[DEAD_ENDS].create_index([("url", 1)], unique=True, name="dead_end_url")
+
+
+async def record_dead_end(
+    db: AsyncDatabase, url: str, reason: str, title: str | None = None
+) -> None:
+    """Note that this URL was fetched and produced nothing worth storing."""
+    now = datetime.now(timezone.utc)
+    await db[DEAD_ENDS].update_one(
+        {"url": url},
+        {
+            "$set": {"reason": reason, "title": title, "last_seen": now},
+            "$setOnInsert": {"url": url, "first_seen": now},
+            "$inc": {"times_seen": 1},
+        },
+        upsert=True,
+    )
+
+
+async def dead_end_urls(db: AsyncDatabase, min_times: int = 2) -> set[str]:
+    """URLs seen to be empty at least `min_times`, so one bad run cannot ban a site.
+
+    A page can be thin because a cycle had not opened yet; banning it after a
+    single look would lose the programme permanently.
+    """
+    cursor = db[DEAD_ENDS].find({"times_seen": {"$gte": min_times}}, {"url": 1, "_id": 0})
+    return {doc["url"] async for doc in cursor}
+
+
+async def clear_dead_end(db: AsyncDatabase, url: str) -> None:
+    """Forget a dead end once that URL produces a usable record."""
+    await db[DEAD_ENDS].delete_many({"url": url})

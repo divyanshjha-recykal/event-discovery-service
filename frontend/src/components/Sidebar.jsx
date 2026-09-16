@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { DEFAULT_CONFIG, runLabel, shortId } from '../api.js'
+import { DEFAULT_CONFIG, estimateCalls, runLabel, runStatus, shortId } from '../api.js'
 import { IconChevron, IconMoon, IconPlay, IconSun, IconTrash } from '../icons.jsx'
 
 // Suggestions only — the field is free text so any OpenRouter model id works,
@@ -15,18 +15,16 @@ const CAPS = [
   ['budget', 'Tool calls', 1, 200, 'Hard ceiling on every paid call in the run.'],
   ['max_searches', 'Searches', 1, 60, 'Tavily calls.'],
   ['max_scrapes', 'Scrapes', 1, 60, 'Firecrawl page fetches, including retries.'],
-  ['max_llm_calls', 'Model calls', 1, 60, 'plan, shortlist, select_links, analyze, extract.'],
+  ['max_llm_calls', 'Model calls', 1, 60, 'Every reasoning call the run makes.'],
   ['wall_clock_seconds', 'Wall clock (s)', 30, 3600, 'Stops a run that hangs on a provider.'],
 ]
 
-const STATUS_CLASS = {
-  completed: 'met',
-  completed_with_rejections: 'met',
-  running: 'unclear',
-  failed: 'not_met',
-}
-
-const statusLabel = (s) => (s === 'completed_with_rejections' ? 'completed' : s)
+const REACH = [
+  ['max_candidates', 'Sites to read', 1, 12, 'Top-k search results taken forward.'],
+  ['max_links_per_page', 'Links per page', 0, 6, 'Links followed from each page read.'],
+  ['max_pages_per_seed', 'Pages per site', 1, 10, 'Total pages read per site, seed included.'],
+  ['max_depth', 'Depth', 0, 3, '1 = seed plus its links. 2 = one level further.'],
+]
 
 export default function Sidebar({
   config, setConfig, busy, onStart, runs, theme, toggleTheme, onClear,
@@ -52,8 +50,8 @@ export default function Sidebar({
         <div className="rail-runs">
           {runs.slice(0, 14).map((r) => (
             <NavLink key={r.run_id} to={`/run/${r.run_id}`}
-                     title={`${statusLabel(r.status)} · ${runLabel(r)} · ${r.counts?.saved ?? 0} saved`}
-                     className={({ isActive }) => `rail-dot ${STATUS_CLASS[r.status] || 'muted'}${isActive ? ' selected' : ''}`} />
+                     title={`${runStatus(r.status).label} · ${runLabel(r)}`}
+                     className={({ isActive }) => `rail-dot ${runStatus(r.status).cls}${isActive ? ' selected' : ''}`} />
           ))}
         </div>
         <div className="spacer" />
@@ -113,6 +111,20 @@ export default function Sidebar({
       </section>
 
       <section className="side-block">
+        <h4>How far to look</h4>
+        {REACH.map(([key, label, min, max, hint]) => (
+          <label className="field" key={key} title={hint}>
+            <span className="small muted">{label}</span>
+            <input type="number" min={min} max={max} value={config[key]} onChange={set(key)} />
+          </label>
+        ))}
+        <p className="hint">
+          Roughly <strong>{estimateCalls(config)}</strong> tool calls per pass at these
+          settings, against a budget of {config.budget}.
+        </p>
+      </section>
+
+      <section className="side-block">
         <details>
           <summary>Seed queries (optional)</summary>
           <textarea
@@ -151,15 +163,15 @@ export default function Sidebar({
             <NavLink to={`/run/${r.run_id}`}
                      className={({ isActive }) => `runrow${isActive ? ' selected' : ''}`}>
               <div className="row">
-                <span className={`pill ${STATUS_CLASS[r.status] || 'muted'}`}>
-                  {statusLabel(r.status)}
+                <span className={`tag ${runStatus(r.status).cls}`}>
+                  {runStatus(r.status).label}
                 </span>
                 <span className="mono small muted">{shortId(r.run_id)}</span>
               </div>
               <div className="small">{runLabel(r)}</div>
               <div className="small muted">
-                {r.counts?.saved ?? 0} saved · {r.counts?.rejected ?? 0} aside ·{' '}
-                {r.counts?.failed ?? 0} failed
+                {r.counts?.saved ?? 0} ready · {r.counts?.needs_deeper ?? 0} thin ·{' '}
+                {r.counts?.rejected ?? 0} aside
               </div>
             </NavLink>
             <button className="runrow-del" type="button"

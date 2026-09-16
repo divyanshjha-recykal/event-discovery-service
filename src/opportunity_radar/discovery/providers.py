@@ -13,6 +13,11 @@ from .state import EvidencePage, SearchHit
 # only to stop a pathological directory listing dominating the bundle.
 MAX_PAGE_CHARS = 200_000
 
+# Per search result, for the site-selection call only. Bounded tightly: this is
+# multiplied by the whole candidate pool, and the aim is enough text to tell a
+# real entry page from marketing copy, not the whole document.
+SEARCH_CONTENT_CHARS = 1_200
+
 # Never worth a search slot: these host no entry pages.
 EXCLUDED_DOMAINS = (
     "facebook.com", "linkedin.com", "instagram.com", "x.com", "twitter.com",
@@ -65,6 +70,10 @@ async def tavily_search(
         max_results=max_results,
         search_depth="advanced",
         exclude_domains=list(EXCLUDED_DOMAINS),
+        # Deliberately NOT include_raw_content: `raw_content` is the whole page
+        # from the top, which on an award site is navigation and hero banner.
+        # `content` below is Tavily's relevance-selected extract — the part that
+        # actually matches the query. Swapping one for the other cost a run.
     )
     return [
         SearchHit(
@@ -72,6 +81,7 @@ async def tavily_search(
             url=str(item.get("url") or ""),
             snippet=str(item.get("content") or "")[:800],
             query=query,
+            score=float(item.get("score") or 0.0),
         )
         for item in payload.get("results", [])
         if item.get("url")

@@ -114,9 +114,10 @@ a:hover { text-decoration: underline; }
   width: 11px; height: 11px; border-radius: 50%; display: block;
   border: 1.5px solid var(--border); background: var(--panel-2);
 }
-.rail-dot.met { background: var(--ok); border-color: var(--ok); }
-.rail-dot.not_met { background: var(--bad); border-color: var(--bad); }
-.rail-dot.unclear { background: var(--warn); border-color: var(--warn); }
+.rail-dot.ok { background: var(--ok); border-color: var(--ok); }
+.rail-dot.bad { background: var(--bad); border-color: var(--bad); }
+.rail-dot.warn { background: var(--warn); border-color: var(--warn); }
+.rail-dot.live { background: var(--accent); border-color: var(--accent); }
 .rail-dot.selected { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
 
 .brand { display: flex; gap: 10px; align-items: center; color: var(--text); }
@@ -509,3 +510,64 @@ pre.scraped { max-height: 460px; white-space: pre-wrap; word-break: break-word; 
   .step-tool { width: auto; }
   .step-summary { display: none; }
 }
+
+/* ------------------------------------------------- one card shape, one tag */
+
+/* Three vocabularies, four colours. Nothing else gets a coloured chip. */
+.tag {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 650; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.tag.ok    { background: var(--ok-bg);   color: var(--ok);   border-color: var(--ok); }
+.tag.bad   { background: var(--bad-bg);  color: var(--bad);  border-color: var(--bad); }
+.tag.warn  { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+.tag.live  { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.tag.muted { background: var(--panel); color: var(--muted); border-color: var(--border); }
+
+/* Link first, tags second — the shape every card shares. */
+.kv {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.tags { display: flex; gap: 5px; flex-wrap: wrap; flex: none; }
+.pagetitle { font-size: 12.5px; margin-top: 5px; }
+
+table.grid { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+table.grid th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); font-weight: 650; padding: 5px 10px 5px 0;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+table.grid td {
+  padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+table.grid tr:last-child td { border-bottom: 0; }
+table.grid td.why { color: var(--muted); }
+table.grid td.clamp {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+table.tightgrid { margin-top: 6px; }
+
+/* Followed pages live inside the page that reached them. */
+.nested { margin-top: 10px; border-left: 2px solid var(--border); padding-left: 11px; }
+.nested-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); font-weight: 650; margin-bottom: 6px;
+}
+.nested-item { padding: 8px 0; border-bottom: 1px dashed var(--border-soft); }
+.nested-item:last-child { border-bottom: 0; }
+
+.cand { padding: 9px 0; border-bottom: 1px dashed var(--border-soft); }
+.cand:last-child { border-bottom: 0; }
+
+.warn-line {
+  color: var(--warn); margin: 8px 0 0; line-height: 1.5;
+}
+
+/* Choosing sites is the run's narrowing moment — give it its own colour. */
+.step.s-shortlist { border-color: var(--note); background: var(--note-bg); }
+.step.s-shortlist .step-icon,
+.step.s-shortlist .step-tool { color: var(--note); }

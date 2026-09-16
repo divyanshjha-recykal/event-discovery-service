@@ -26,6 +26,10 @@ class SearchHit:
     snippet: str
     query: str
     score: float = 0.0
+    #: Page text Tavily returns on the same search call. Choosing which sites to
+    #: read from an 800-character marketing blurb is what let a design
+    #: competition through and dropped the ET awards; this is what replaces it.
+    content: str = ""
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,9 @@ class EvidencePage:
 class EvidenceBundle:
     seed_url: str
     pages: tuple[EvidencePage, ...]
+    #: Same-site links seen but not followed, so a thin bundle can say whether
+    #: there was anywhere left to look or the site simply had nothing.
+    unfollowed: tuple[str, ...] = ()
 
     @property
     def source_urls(self) -> list[str]:
@@ -103,9 +110,32 @@ class CandidateVerdict:
     supporting_urls: tuple[str, ...]
     decision: Literal["pursue", "skip"]
     reason: str
+    organizing_body: str = ""
+    base_title: str = ""
+    cycle_year: int = 0
+    status: str = "unclear"
+    submission_deadline: str | None = None
+    deadline_note: str | None = None
+    event_date: str | None = None
+    confidence_note: str = ""
     entry_eligibility: tuple[str, ...] = ()
     judging_criteria: tuple[str, ...] = ()
     application_requirements: tuple[str, ...] = ()
+
+
+@dataclass
+class TraversalLimits:
+    """How far research is allowed to go. Set per run from the configurator.
+
+    `max_depth=1` means only the seed's links are followed. Raising it lets a
+    followed page have its own links chosen too — which the code refused to do
+    at any setting until the `depth > 0` guard was removed.
+    """
+
+    max_candidates: int = 5      # seeds taken from the search pool
+    max_links_per_page: int = 2
+    max_pages_per_seed: int = 3
+    max_depth: int = 1
 
 
 @dataclass
@@ -115,9 +145,16 @@ class WorkflowRuntime:
     model: str | None
     dry_run: bool
     run_id: str
+    limits: TraversalLimits = field(default_factory=TraversalLimits)
+    #: Full BusinessProfile.md, for the feasibility check. Discovery gets a
+    #: distilled seed; feasibility needs everything, because any field could
+    #: settle any condition.
+    profile_text: str = ""
     trace_url: str | None = None
     journey: list[dict[str, Any]] = field(default_factory=list)
     saved: list[str] = field(default_factory=list)
+    #: Stored, but with no entry conditions to judge — counted apart from saved.
+    needs_deeper: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     historical: list[str] = field(default_factory=list)

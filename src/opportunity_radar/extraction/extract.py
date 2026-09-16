@@ -54,7 +54,6 @@ EXTRACTION_JSON_SCHEMA = {
             "type": ["string", "null"],
             "enum": ["award", "grant", "event", "conference", None],
         },
-        "eligibility_criteria": {"type": "array", "items": {"type": "string"}},
         "submission_deadline": {"type": ["string", "null"]},
         "deadline_note": {"type": ["string", "null"]},
         "event_date": {"type": ["string", "null"]},
@@ -67,7 +66,6 @@ EXTRACTION_JSON_SCHEMA = {
         "base_title",
         "cycle_year",
         "category",
-        "eligibility_criteria",
         "submission_deadline",
         "deadline_note",
         "event_date",
@@ -99,28 +97,6 @@ nothing else. Do not drop place names, organiser names or any other words: \
 apply the same rule regardless of what words happen to appear in the title.
   cycle_year            integer year of THIS edition
   category              "award" | "grant" | "event" | "conference"
-  eligibility_criteria  array of conditions an applicant must satisfy. \
-Return [] if the page states none.
-
-    Each entry must be ONE complete, independently checkable condition, \
-written so it still makes sense on its own with no surrounding context.
-
-    Do not split a single sentence into fragments. "Any organization of any \
-type or size, from any industry, in any country" is ONE condition, not three. \
-A fragment like "From any industry" cannot be judged on its own.
-
-    Keep alternatives together in one entry. "Open to individuals or \
-institutions" is ONE condition — splitting it into "Individuals" and \
-"Institutions" turns a choice into two requirements, and an applicant that is \
-one but not the other then looks half-ineligible.
-
-    Do not return a paragraph either. If a sentence genuinely states several \
-separate requirements ("must be registered in the host country, and must have \
-three \
-years of operating history"), split it there.
-
-    Only include conditions for ENTERING. A list of who attends, who speaks, \
-or which job titles the audience holds is not eligibility.
   submission_deadline   "YYYY-MM-DD" or null
   deadline_note         a short note if the deadline is relative or rolling \
 (e.g. "rolling", "30 days after announcement"), otherwise null
@@ -280,7 +256,6 @@ def extract(
                 "category": result.category,
                 "submission_deadline": result.submission_deadline,
                 "deadline_verified": result.deadline_verified,
-                "criteria_count": len(result.eligibility_criteria),
                 "confidence_note": result.confidence_note,
             })
         return result
@@ -439,7 +414,6 @@ def _build_record(
             base_title=base,
             cycle_year=payload.get("cycle_year"),
             category=payload.get("category"),
-            eligibility_criteria=_as_criteria(payload.get("eligibility_criteria")),
             submission_deadline=deadline,
             deadline_note=_as_text(payload.get("deadline_note")) or None,
             deadline_verified=grounding.verified,
@@ -455,6 +429,20 @@ def _build_record(
         )
 
     return record
+
+
+def build_record(
+    fields: dict, evidence_text: str, source_url: str, page_title: str | None = None
+) -> OpportunityRecord | ExtractionFailure:
+    """Validate already-structured fields into a record. No model call.
+
+    Analyze reads the evidence and produces the listing; this turns that listing
+    into a stored record. The deterministic parts stay exactly where they were —
+    `strip_edition` on the identity key, `verify_deadline` against the source
+    text, pydantic validation, typed failures — they simply no longer require a
+    second model to re-read a page the first model already read.
+    """
+    return _build_record(fields, evidence_text, source_url, page_title)
 
 
 def record_warnings(record: OpportunityRecord, today: date | None = None) -> list[str]:

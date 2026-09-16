@@ -48,7 +48,7 @@ export default function Overview({ data }) {
                 </div>
                 <div className="l">
                   {m.criteria.met} met · {m.criteria.not_met} not met ·{' '}
-                  {m.criteria.unclear} for you to judge
+                  {m.criteria.unclear} need review
                 </div>
               </>
             )}
@@ -88,7 +88,7 @@ export default function Overview({ data }) {
             Built from saved editions. A typical window appears once two dated
             editions are known, and predicts when the next cycle opens.
           </p>
-          <table className="crit">
+          <table className="grid">
             <thead>
               <tr><th>Programme</th><th style={{ width: 180 }}>Editions</th><th style={{ width: 190 }}>Typical window</th></tr>
             </thead>
