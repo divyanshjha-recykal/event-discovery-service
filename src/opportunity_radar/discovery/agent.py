@@ -112,6 +112,8 @@ async def run_discovery(
                     "callbacks": [trace_handler()],
                     # One optional re-plan means at most seven node executions.
                     "recursion_limit": 10,
+                    # Names the saved progress for this run, so it can resume.
+                    "configurable": {"thread_id": run_id},
                 },
             )
             # A run either worked or it did not. "Completed with rejections"

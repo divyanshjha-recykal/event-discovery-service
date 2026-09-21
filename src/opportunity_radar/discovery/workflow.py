@@ -6,15 +6,19 @@ import asyncio
 import json
 import re
 from datetime import date
-from functools import partial
+from functools import lru_cache, partial
 from itertools import zip_longest
 from typing import Annotated, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from pymongo import MongoClient
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.mongodb import MongoDBSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from ..config import discovery_temperature
+from ..config import MongoConfig, discovery_temperature
 from ..eligibility import evaluate_criteria
 from ..extraction import (
     ExtractionFailure,
@@ -950,6 +954,7 @@ async def research_node(
         await _record(runtime, tool, **fields)
 
     hits = list(state.get("search_hits", []))
+    already_had = {hit.url for hit in hits}
     seen_queries = {hit.query for hit in hits}
 
     async def run_queries(planned_list: list[PlannedQuery], round_label: str) -> None:
@@ -1119,7 +1124,7 @@ async def research_node(
     if not picks and not shortlist_answered:
         picks = [(hit, "search-engine order (shortlist unavailable)") for hit in ranked]
 
-    bundles = list(state.get("evidence_bundles", []))
+    bundles: list[EvidenceBundle] = []
     choose_links = None if runtime.dry_run else _link_chooser(runtime, today)
     added = 0
     for hit, reason in picks:
@@ -1136,11 +1141,12 @@ async def research_node(
             added += 1
         _ = reason
 
+    # Only what this pass added. The state's merge rules join it to what was
+    # already there, so two steps can write the same field without erasing it.
     return {
-        "search_hits": ordered,
+        "search_hits": [hit for hit in ordered if hit.url not in already_had],
         "evidence_bundles": bundles,
-        # Both waves, so the run's record of what it searched is complete.
-        "planned_queries": planned_all,
+        "planned_queries": planned_all[len(state.get("planned_queries", [])):],
     }
 
 
@@ -1310,7 +1316,6 @@ async def analyze_node(
         if bundle.seed_url not in analyzed
     ]
     if not bundles:
-        candidates = list(state.get("candidates", []))
         await _record(
             runtime,
             "analyze",
@@ -1318,14 +1323,10 @@ async def analyze_node(
             outcome="no_new_evidence",
             candidates=[],
         )
-        return {
-            "candidates": candidates,
-            "analyzed_seeds": list(analyzed),
-            "analysis_errors": [],
-            "replan_count": state["replan_count"] + 1,
-        }
+        return {"replan_count": state["replan_count"] + 1}
 
-    candidates = list(state.get("candidates", []))
+    seeds_done: list[str] = []
+    candidates: list[CandidateVerdict] = []
     errors: list[dict[str, str]] = []
     if runtime.dry_run:
         bundle = bundles[0]
@@ -1341,6 +1342,7 @@ async def analyze_node(
             )
         )
         analyzed.add(bundle.seed_url)
+        seeds_done.append(bundle.seed_url)
     else:
         for bundle in bundles:
             # A near-empty bundle means the fetch failed, not that the page had
@@ -1361,6 +1363,7 @@ async def analyze_node(
                     outcome="insufficient", chars=evidence_chars, detail=detail,
                 )
                 analyzed.add(bundle.seed_url)
+                seeds_done.append(bundle.seed_url)
                 continue
 
             refusal = runtime.budget.refusal("analyze")
@@ -1375,6 +1378,7 @@ async def analyze_node(
                 runtime.failures.append(f"analysis {bundle.seed_url}: {detail}")
             finally:
                 analyzed.add(bundle.seed_url)
+                seeds_done.append(bundle.seed_url)
 
     # One entity can appear through several search hits. Keep the best canonical
     # identity instead of paying to extract it repeatedly.
@@ -1411,7 +1415,7 @@ async def analyze_node(
     pursued = [item for item in candidates if item.decision == "pursue"]
     return {
         "candidates": candidates,
-        "analyzed_seeds": list(analyzed),
+        "analyzed_seeds": seeds_done,
         "analysis_errors": errors,
         "replan_count": state["replan_count"] + (0 if pursued or errors else 1),
     }
@@ -1457,7 +1461,7 @@ async def finalize_node(
     runtime = services
     today = date.fromisoformat(state["as_of_date"])
     bundles = {bundle.seed_url: bundle for bundle in state["evidence_bundles"]}
-    rejected = list(state.get("rejected", []))
+    rejected: list[dict] = []
 
     for candidate in state["candidates"]:
         if candidate.decision == "skip":
@@ -1731,7 +1735,7 @@ async def finalize_node(
         f"Discovery researched {len(state['evidence_bundles'])} candidate bundle(s), "
         f"saved {len(runtime.saved)} actionable opportunity(ies), "
         f"recorded {len(runtime.historical)} historical edition(s), and rejected "
-        f"{len(rejected)} candidate(s)."
+        f"{len(rejected) + len(state.get('rejected', []))} candidate(s)."
     )
     return {"rejected": rejected, "summary": summary}
 
@@ -1752,6 +1756,43 @@ def _traced_node(name: str, fn, runtime: WorkflowRuntime):
     return run
 
 
+# Our own state types, so they come back as themselves after being saved rather
+# than as plain dictionaries.
+_STATE_TYPES = [
+    ("opportunity_radar.discovery.state", name)
+    for name in (
+        "PlannedQuery", "SearchHit", "EvidencePage",
+        "EvidenceBundle", "CandidateVerdict",
+    )
+]
+_SERDE = JsonPlusSerializer(
+    allowed_msgpack_modules=_STATE_TYPES,
+    allowed_json_modules=_STATE_TYPES,
+)
+
+
+@lru_cache(maxsize=1)
+def _progress_saver():
+    """Where a run's finished steps are kept so it can resume after a failure.
+
+    Mongo, so progress outlives a server restart. Falls back to memory if Mongo
+    is unreachable: a run that cannot save progress should still run.
+    """
+    try:
+        config = MongoConfig.from_env()
+        saver = MongoDBSaver(
+            client=MongoClient(config.uri, serverSelectionTimeoutMS=3_000),
+            db_name=config.database,
+            checkpoint_collection_name="run_progress",
+            writes_collection_name="run_progress_writes",
+            serde=_SERDE,
+        )
+        next(saver.list(None, limit=1), None)  # fail here, not mid-run
+        return saver
+    except Exception:  # noqa: BLE001
+        return InMemorySaver(serde=_SERDE)
+
+
 def build_discovery_graph(runtime: WorkflowRuntime):
     builder = StateGraph(DiscoveryState)
     builder.add_node(
@@ -1769,4 +1810,4 @@ def build_discovery_graph(runtime: WorkflowRuntime):
         {"replan": "plan_queries", "finalize": "finalize"},
     )
     builder.add_edge("finalize", END)
-    return builder.compile()
+    return builder.compile(checkpointer=_progress_saver())

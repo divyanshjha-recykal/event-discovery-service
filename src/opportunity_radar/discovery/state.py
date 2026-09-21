@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from .budget import RunBudget
 
@@ -167,16 +167,41 @@ class WorkflowRuntime:
     historical: list[str] = field(default_factory=list)
 
 
+def _merge(key):
+    """Build a merge rule that appends new items and drops repeats by `key`."""
+
+    def merge(current: list, incoming: list) -> list:
+        out = list(current or [])
+        seen = {key(item) for item in out}
+        for item in incoming or []:
+            if (marker := key(item)) not in seen:
+                seen.add(marker)
+                out.append(item)
+        return out
+
+    return merge
+
+
+def _append(current: list, incoming: list) -> list:
+    return list(current or []) + list(incoming or [])
+
+
+# Fields that collect things across steps. Without these every step overwrites
+# the whole list, so only one step can ever write a field and "for each site"
+# has to be a loop inside one step. Steps now return only what they added.
 class DiscoveryState(TypedDict):
     as_of_date: str
     supplied_queries: list[str]
     memory: str
-    planned_queries: list[PlannedQuery]
-    search_hits: list[SearchHit]
-    evidence_bundles: list[EvidenceBundle]
-    candidates: list[CandidateVerdict]
-    analyzed_seeds: list[str]
-    analysis_errors: list[dict[str, str]]
-    rejected: list[dict[str, Any]]
+    planned_queries: Annotated[list[PlannedQuery], _merge(lambda q: q.query)]
+    search_hits: Annotated[list[SearchHit], _merge(lambda h: h.url)]
+    evidence_bundles: Annotated[list[EvidenceBundle], _merge(lambda b: b.seed_url)]
+    candidates: Annotated[
+        list[CandidateVerdict],
+        _merge(lambda c: (c.target_title.casefold(), c.source_url)),
+    ]
+    analyzed_seeds: Annotated[list[str], _merge(lambda s: s)]
+    analysis_errors: Annotated[list[dict[str, str]], _append]
+    rejected: Annotated[list[dict[str, Any]], _append]
     summary: str
     replan_count: int
