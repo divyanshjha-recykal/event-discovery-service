@@ -364,7 +364,7 @@ Three paths, in priority order:
    `intent="mixed"`, no model call. This also disables re-planning, because the caller
    asked a specific question and a re-plan would silently change it.
 2. **Dry run** — three fallback queries from the profile, no network.
-3. **Normal** — one strict `json_schema` call returning 8–10 queries.
+3. **Normal** — one strict `json_schema` call returning exactly six queries.
 
 Before the call, `_memory()` assembles what the planner is allowed to know:
 `discovery_seed()` (five verbatim profile sections), `known_orgs()` (organising bodies
@@ -380,7 +380,7 @@ The prompt's governing rule is query length:
 It also bans quotation marks, unexplained acronyms, product and hardware category
 names, and copying programme names out of the profile; and it directs variation across
 the field named, whether a year appears, the kind of recognition, the kind of body that
-runs it, and company stage. Seven or eight queries must name the primary market.
+runs it, and company stage. Four or five queries must name the primary market.
 
 **Geography and sector are read from `BusinessProfile.md`, never from code.** An
 earlier version hardcoded a region into the prompt and pointed an entire run at a
@@ -403,10 +403,10 @@ call per seed, and one scrape per page fetched.
 
 Four phases inside one node.
 
-**a. Search.** `tavily_search(query, max_results=7, search_depth="advanced")`, with nine
-social domains excluded. Queries already seen this run are skipped, so a re-plan that
-repeats a query costs nothing. A failure is logged to the journey and the run
-continues.
+**a. Search.** `tavily_search(query, max_results=7,
+search_depth="advanced", chunks_per_source=3)`, with social domains excluded.
+Tavily's chunked content is retained separately from the display snippet. Queries
+already seen this run are skipped, so a re-plan that repeats one costs nothing.
 
 Tavily's `country` parameter is deliberately **not** used: measured against live
 queries it never biased toward the named market, and combined with the market in the
@@ -418,9 +418,10 @@ host, `www.` stripped, tracking parameters removed, trailing slash normalised �
 deduplicated. There is **no keyword scoring**: a regex tuned for award-marketing words
 scored "Sustainability Leadership Awards" at zero and dropped it from two runs.
 
-**c. Shortlist.** Up to `SHORTLIST_POOL = 80` hits are presented as a numbered list and
-the model returns **indices**, not URLs — an index cannot resolve to a page the model
-invented. It picks `MAX_RESEARCH_CANDIDATES = 4`.
+**c. Shortlist.** Up to `SHORTLIST_POOL = 80` hits are presented as a numbered list
+using up to 1,200 characters of Tavily evidence, the originating query and Tavily's
+score. The model returns **indices**, not URLs — an index cannot resolve to a page the
+model invented. It picks `MAX_RESEARCH_CANDIDATES = 4`.
 
 The prompt reduces the decision to one question:
 

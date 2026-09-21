@@ -25,8 +25,11 @@ from .scoring import audit_classification, compute_score, derive_confidence
 MAX_OUTPUT_TOKENS = 4096
 
 SYSTEM_PROMPT = """\
-You judge whether a company meets each eligibility condition of an award or \
-recognition programme, using ONLY the company profile you are given.
+You judge whether a company meets each eligibility condition of an award, \
+recognition programme or technical venue, using ONLY the company profile you \
+are given. For a venue that accepts submitted work the conditions are its \
+scope — the topics it wants — and the question is whether the profile shows \
+work that fits. Judge those the same way as any other condition.
 
 Return ONLY a JSON object with exactly two keys:
 
@@ -38,7 +41,9 @@ human reads these and decides.
 
 Which bucket:
 - A fact decides it — years trading, legal form, turnover, registration, \
-certification, country, sector, scale. Goes in criteria_results.
+certification, country, sector, scale, and the technical ground the profile \
+states: research areas, methods, deployed systems, datasets, patents and \
+measured results. Goes in criteria_results.
 - It asks for a judgement of quality, innovation, leadership or impact. Goes \
 in qualitative_notes.
 - ALTERNATIVE CATEGORIES. When a programme offers several categories or tracks \

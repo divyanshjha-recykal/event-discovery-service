@@ -101,19 +101,50 @@ function ChooseSitesBody({ e }) {
   if (e.outcome !== 'ok') {
     return <p className="err small tight">{e.detail || 'Selection failed; fell back to search order.'}</p>
   }
+  const ranked = e.picked || []
+  if (!ranked.length) {
+    return (
+      <p className="small tight">
+        Nothing in {e.considered} results was worth fetching. The run searches
+        again rather than spending scrapes on the least-bad result.
+      </p>
+    )
+  }
+  // The whole ranking, not only what was fetched. Seeing the near-misses just
+  // below the cut is the point: whether the good programme sat one place too
+  // low used to be unanswerable.
   return (
-    <table className="grid">
-      <thead><tr><th style={{ width: '34%' }}>Site</th><th style={{ width: 210 }}>Link</th><th>Why chosen</th></tr></thead>
-      <tbody>
-        {(e.picked || []).map((p, i) => (
-          <tr key={i}>
-            <td>{p.title}</td>
-            <td><Url href={p.url}>{p.url.replace(/^https?:\/\//, '').slice(0, 42)}</Url></td>
-            <td className="why">{p.reason}</td>
+    <>
+      {e.observation && <p className="why small tight">{e.observation}</p>}
+      <table className="grid">
+        <thead>
+          <tr>
+            <th style={{ width: 34 }}>#</th>
+            <th style={{ width: '32%' }}>Site</th>
+            <th style={{ width: 200 }}>Link</th>
+            <th>Why ranked here</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {ranked.map((p, i) => (
+            <tr key={i} className={p.fetched === false ? 'dim' : undefined}>
+              <td className="mono small">
+                {p.rank ?? i + 1}
+                {p.fetched === false && <span className="muted"> ·</span>}
+              </td>
+              <td>{p.title}</td>
+              <td><Url href={p.url}>{p.url.replace(/^https?:\/\//, '').slice(0, 42)}</Url></td>
+              <td className="why">{p.reason}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {ranked.some((p) => p.fetched === false) && (
+        <p className="hint small">
+          Dimmed rows were ranked but fell outside the scrape budget.
+        </p>
+      )}
+    </>
   )
 }
 
@@ -272,10 +303,16 @@ function headline(e) {
         ? 'fallback plan used'
         : plural((e.queries || []).length, 'query', 'queries')
     case 'search': return e.query
-    case 'shortlist':
-      return e.outcome === 'ok'
-        ? `${(e.picked || []).length} of ${e.considered} results`
-        : 'selection failed'
+    case 'shortlist': {
+      if (e.outcome !== 'ok') return 'selection failed'
+      const ranked = e.picked || []
+      if (!ranked.length) return `nothing worth fetching in ${e.considered}`
+      // "to fetch", not "fetched": this is what the ranking chose, and the
+      // fetches happen after. A stopped run showed "5 fetched of 10" with zero
+      // scrapes on the meter.
+      const taken = ranked.filter((p) => p.fetched !== false).length
+      return `${taken} to fetch of ${ranked.length} ranked, from ${e.considered}`
+    }
     case 'scrape': return (e.url || '').replace(/^https?:\/\//, '')
     case 'analyze': {
       const c = e.candidates || []

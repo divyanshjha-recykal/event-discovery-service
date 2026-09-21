@@ -45,6 +45,26 @@ export const OUTCOME = {
 export const outcome = (key) =>
   OUTCOME[key] || { label: key || 'unknown', cls: 'muted' }
 
+/** What a run is looking for. Steers the search; filters nothing. */
+export const FOCUS = [
+  ['any', 'Everything', 'Awards, events and technical venues together.'],
+  ['award', 'Awards', 'Prizes, rankings and honours that name a winner.'],
+  ['event', 'Events', 'Conferences, summits, forums and expos.'],
+  ['research', 'Research', 'Calls for papers, workshops and industry tracks.'],
+]
+
+/** What kind of opportunity a stored record is. */
+export const CATEGORY = {
+  award: { label: 'Award', cls: 'ok' },
+  event: { label: 'Event', cls: 'live' },
+  conference: { label: 'Conference', cls: 'live' },
+  research: { label: 'Research venue', cls: 'warn' },
+  grant: { label: 'Grant', cls: 'muted' },
+}
+
+export const category = (key) =>
+  CATEGORY[key] || { label: key || 'Opportunity', cls: 'muted' }
+
 /** One eligibility condition. */
 export const VERDICT = {
   met: { label: 'Met', cls: 'ok', order: 0 },
@@ -81,10 +101,11 @@ export const DEFAULT_CONFIG = {
   max_scrapes: 20,
   max_llm_calls: 22,
   wall_clock_seconds: 900,
-  max_candidates: 5,
+  max_candidates: 8,
   max_links_per_page: 2,
-  max_pages_per_seed: 3,
+  max_pages_per_seed: 2,
   max_depth: 1,
+  focus: 'any',
   queries: '',
 }
 
@@ -114,6 +135,7 @@ export const toRequest = (config, dryRun) => ({
   max_links_per_page: Number(config.max_links_per_page),
   max_pages_per_seed: Number(config.max_pages_per_seed),
   max_depth: Number(config.max_depth),
+  focus: config.focus || 'any',
   queries: config.queries.split('\n').map((q) => q.trim()).filter(Boolean),
   dry_run: dryRun,
 })
@@ -123,7 +145,10 @@ export const estimateCalls = (c) => {
   const seeds = Number(c.max_candidates)
   const perSeed = Number(c.max_pages_per_seed)
   const linkCalls = Number(c.max_depth) > 0 ? seeds * Number(c.max_depth) : 0
-  return 1 + 10 + 1 + linkCalls + seeds * perSeed + seeds + seeds
+  // 2 planning calls (the plan is written in two waves), 5 searches, 1 ranking,
+  // one link-choice per depth level per seed, then the pages themselves, one
+  // analyze per seed and one save per seed.
+  return 2 + 5 + 1 + linkCalls + seeds * perSeed + seeds + seeds
 }
 
 export const shortId = (id) => (id || '').slice(0, 6)

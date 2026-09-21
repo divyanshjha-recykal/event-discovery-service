@@ -1,13 +1,15 @@
 import { NavLink } from 'react-router-dom'
-import { DEFAULT_CONFIG, estimateCalls, runLabel, runStatus, shortId } from '../api.js'
+import { DEFAULT_CONFIG, FOCUS, estimateCalls, runLabel, runStatus, shortId } from '../api.js'
 import { IconChevron, IconMoon, IconPlay, IconSun, IconTrash } from '../icons.jsx'
 
 // Suggestions only — the field is free text so any OpenRouter model id works,
 // and blank means the server's OPENROUTER_MODEL.
 const SUGGESTED = [
+  'deepseek/deepseek-v4.1-flash',
+  'tencent/hy3',
   'qwen/qwen3-32b',
-  'z-ai/glm-4.7-flash',
-  'google/gemma-4-31b-it',
+  'z-ai/glm-5.3-flash',
+  'xiaomi/mimo-v2.5',
   'ibm-granite/granite-4.1-8b',
 ]
 
@@ -97,6 +99,27 @@ export default function Sidebar({
       </section>
 
       <section className="side-block">
+        <h4>Looking for</h4>
+        <div className="focus-picker">
+          {FOCUS.map(([value, label, hint]) => (
+            <button
+              key={value}
+              type="button"
+              title={hint}
+              className={`focus-opt${(config.focus || 'any') === value ? ' on' : ''}`}
+              onClick={() => setConfig({ ...config, focus: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="hint">
+          {(FOCUS.find(([v]) => v === (config.focus || 'any')) || [])[2]} Steers
+          what gets searched for; nothing is discarded for being another kind.
+        </p>
+      </section>
+
+      <section className="side-block">
         <h4>Budget caps</h4>
         {CAPS.map(([key, label, min, max, hint]) => (
           <label className="field" key={key} title={hint}>
@@ -105,7 +128,7 @@ export default function Sidebar({
           </label>
         ))}
         <button className="link-btn" type="button"
-                onClick={() => setConfig({ ...config, ...DEFAULT_CONFIG, model: config.model })}>
+                onClick={() => setConfig({ ...config, ...DEFAULT_CONFIG, model: config.model, focus: config.focus })}>
           Reset caps to defaults
         </button>
       </section>

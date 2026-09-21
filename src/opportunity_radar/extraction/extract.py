@@ -30,6 +30,7 @@ from ..tracing import chat_model, stage_span, trace_handler
 from .base_title import edition_residue, strip_edition
 from .failures import ExtractionFailure, FailureReason
 from .grounding import verify_deadline
+from ..storage.identity import normalize
 from .schema import OpportunityRecord
 
 # Below this, there is not enough page to build a record from. Chosen to be
@@ -443,6 +444,17 @@ def build_record(
     second model to re-read a page the first model already read.
     """
     return _build_record(fields, evidence_text, source_url, page_title)
+
+
+def body_is_grounded(organizing_body: str, scraped_text: str) -> bool:
+    """True if any significant word of the organising body appears in the page."""
+    if not (organizing_body or "").strip():
+        return False
+    words = [w for w in normalize(organizing_body).split() if len(w) > 3]
+    if not words:
+        return False
+    haystack = normalize(scraped_text)
+    return any(word in haystack for word in words)
 
 
 def record_warnings(record: OpportunityRecord, today: date | None = None) -> list[str]:

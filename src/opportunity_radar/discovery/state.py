@@ -7,7 +7,11 @@ from typing import Any, Literal, TypedDict
 
 from .budget import RunBudget
 
-Category = Literal["award", "grant", "event", "conference"]
+Category = Literal["award", "grant", "event", "conference", "research"]
+
+#: What a run is looking for. "any" searches everything, as before. The operator
+#: picks this; it steers what gets searched and never rejects anything in code.
+Focus = Literal["any", "award", "event", "research"]
 
 
 @dataclass(frozen=True)
@@ -132,9 +136,9 @@ class TraversalLimits:
     at any setting until the `depth > 0` guard was removed.
     """
 
-    max_candidates: int = 5      # seeds taken from the search pool
+    max_candidates: int = 8      # seeds taken from the search pool
     max_links_per_page: int = 2
-    max_pages_per_seed: int = 3
+    max_pages_per_seed: int = 2
     max_depth: int = 1
 
 
@@ -150,6 +154,9 @@ class WorkflowRuntime:
     #: distilled seed; feasibility needs everything, because any field could
     #: settle any condition.
     profile_text: str = ""
+    #: What this run is looking for. One line in the planning and site-selection
+    #: prompts; nothing in code filters on it.
+    focus: str = "any"
     trace_url: str | None = None
     journey: list[dict[str, Any]] = field(default_factory=list)
     saved: list[str] = field(default_factory=list)

@@ -1,4 +1,4 @@
-import { VERDICT } from '../api.js'
+import { VERDICT, category } from '../api.js'
 
 export default function Opportunity({ o }) {
   const e = o.eligibility
@@ -15,13 +15,19 @@ export default function Opportunity({ o }) {
   const judgeCount = rows.filter(
     (r) => r.verdict === 'unclear' || r.verdict === 'qualitative',
   ).length
+  const kind = category(o.category)
+  // A research venue states no conditions on who may enter — anyone may. What
+  // is judged instead is whether our work is in the scope it asks for, so the
+  // same field is labelled for what it actually holds.
+  const isResearch = o.category === 'research'
+  const conditionLabel = isResearch ? 'Scope it asks for' : 'Eligibility conditions'
 
   return (
     <article className="opp">
       <h3>{o.title}</h3>
       <div className="row small muted" style={{ marginBottom: 6 }}>
         <span>{o.organizing_body}</span>
-        <span className="pill muted">{o.category}</span>
+        <span className={`pill ${kind.cls}`}>{kind.label}</span>
         <span className="pill muted">cycle {o.cycle_year}</span>
         <span className={`pill ${o.submission_deadline ? 'met' : 'muted'}`}>
           {o.submission_deadline || 'no deadline found'}
@@ -63,7 +69,7 @@ export default function Opportunity({ o }) {
       )}
 
       <div className="section-label">
-        Eligibility conditions
+        {conditionLabel}
         {rows.length > 0 && <span className="muted"> — {rows.length} judged</span>}
       </div>
 
@@ -77,7 +83,9 @@ export default function Opportunity({ o }) {
       )}
       {!e && !(o.eligibility_criteria || []).length && (
         <p className="muted small tight">
-          No eligibility conditions were extracted from this page, so it cannot be evaluated.
+          {isResearch
+            ? 'No scope or topic list was found on this page, so it cannot be evaluated.'
+            : 'No eligibility conditions were extracted from this page, so it cannot be evaluated.'}
         </p>
       )}
 
@@ -86,7 +94,7 @@ export default function Opportunity({ o }) {
           <table className="grid">
             <thead>
               <tr>
-                <th style={{ width: '42%' }}>Condition</th>
+                <th style={{ width: '42%' }}>{isResearch ? 'Topic' : 'Condition'}</th>
                 <th style={{ width: 104 }}>Verdict</th>
                 <th>Reasoning</th>
               </tr>

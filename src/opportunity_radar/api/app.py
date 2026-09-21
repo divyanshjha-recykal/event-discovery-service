@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -354,10 +354,14 @@ class RunConfig(BaseModel):
     wall_clock_seconds: int = Field(default=900, ge=30, le=3600)
     # How far research reaches. `max_depth` was inert until the traversal bug
     # was fixed: link choice never ran below the seed whatever it was set to.
-    max_candidates: int = Field(default=5, ge=1, le=12)
+    max_candidates: int = Field(default=8, ge=1, le=12)
     max_links_per_page: int = Field(default=2, ge=0, le=6)
-    max_pages_per_seed: int = Field(default=3, ge=1, le=10)
+    max_pages_per_seed: int = Field(default=2, ge=1, le=10)
     max_depth: int = Field(default=1, ge=0, le=3)
+    # What this run is looking for. Steers the planner and site selection;
+    # nothing in code filters on it, so a focused run that meets a great
+    # opportunity of another kind still keeps it.
+    focus: Literal["any", "award", "event", "research"] = "any"
     queries: list[str] = Field(default_factory=list)
     dry_run: bool = False
 
@@ -412,7 +416,7 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
             discovery = await run_discovery(
                 _db, queries=request.queries or None,
                 model=request.model, budget=budget, limits=limits,
-                dry_run=request.dry_run, run_id=run_id,
+                dry_run=request.dry_run, run_id=run_id, focus=request.focus,
             )
         except Exception as exc:  # noqa: BLE001
             await _db[RUNS].update_one(
@@ -476,6 +480,7 @@ async def start_discovery(request: RunRequest, background: BackgroundTasks) -> d
                 limits=limits,
                 dry_run=request.dry_run,
                 run_id=run_id,
+                focus=request.focus,
             )
         except Exception as exc:  # noqa: BLE001 — surfaced through the run record
             await _db[RUNS].update_one(

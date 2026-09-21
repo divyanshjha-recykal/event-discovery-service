@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { api, outcome as outcomeOf, runLabel, runStatus, shortId, STAGES, STAGE_OF } from '../api.js'
+import { api, category as categoryOf, outcome as outcomeOf, runLabel, runStatus, shortId, STAGES, STAGE_OF } from '../api.js'
 import { IconExternal, IconStop } from '../icons.jsx'
 import ExportPanel from './ExportPanel.jsx'
 import Journey from './Journey.jsx'
@@ -84,6 +84,10 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
   const [events, setEvents] = useState([])
   const [results, setResults] = useState(null)
   const [tab, setTab] = useState('journey')
+  // Which kind of opportunity the Results tab is showing. A focused run still
+  // keeps anything good it finds of another kind — the focus steers the search
+  // and never discards — so the filtering belongs here, in the view.
+  const [kind, setKind] = useState('all')
   const [error, setError] = useState(null)
   const [exporting, setExporting] = useState(false)
 
@@ -164,6 +168,13 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
   }
   const ready = saved.filter((o) => o.record_state !== 'needs_deeper_read')
   const thin = saved.filter((o) => o.record_state === 'needs_deeper_read')
+
+  // Counts per kind, commonest first, so the chips read as a summary of what
+  // the run actually found rather than a fixed set of categories.
+  const kinds = Object.entries(
+    ready.reduce((acc, o) => ({ ...acc, [o.category]: (acc[o.category] || 0) + 1 }), {}),
+  ).sort((a, b) => b[1] - a[1])
+  const shown = kind === 'all' ? ready : ready.filter((o) => o.category === kind)
 
   return (
     <>
@@ -259,9 +270,30 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
         {tab === 'opportunities' && (
           ready.length ? (
             <>
-              {ready.map((o) => (
+              {kinds.length > 1 && (
+                <div className="kind-filter">
+                  <button type="button"
+                          className={`focus-opt${kind === 'all' ? ' on' : ''}`}
+                          onClick={() => setKind('all')}>
+                    All {ready.length}
+                  </button>
+                  {kinds.map(([key, count]) => (
+                    <button key={key} type="button"
+                            className={`focus-opt${kind === key ? ' on' : ''}`}
+                            onClick={() => setKind(key)}>
+                      {categoryOf(key).label} {count}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {shown.map((o) => (
                 <Opportunity key={`${o.source_url}-${o.base_title}`} o={o} />
               ))}
+              {!shown.length && (
+                <p className="muted tight">
+                  Nothing of that kind in this run&rsquo;s results.
+                </p>
+              )}
               {!!(results?.missing || []).length && (
                 <p className="small muted">
                   {results.missing.length} record(s) this run saved are no longer in

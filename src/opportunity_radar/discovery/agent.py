@@ -42,6 +42,7 @@ async def run_discovery(
     dry_run: bool = False,
     run_id: str | None = None,
     limits: TraversalLimits | None = None,
+    focus: str = "any",
 ) -> DiscoveryRun:
     """Run Plan -> Research -> Analyze -> Finalize without free-form tool control."""
     budget = budget or RunBudget()
@@ -56,6 +57,7 @@ async def run_discovery(
         run_id=run_id,
         limits=limits,
         profile_text=load_business_profile().text,
+        focus=focus,
     )
 
     try:
@@ -69,6 +71,7 @@ async def run_discovery(
                 "max_links_per_page": limits.max_links_per_page,
                 "max_pages_per_seed": limits.max_pages_per_seed,
                 "max_depth": limits.max_depth,
+                "focus": focus,
                 "workflow": "plan-research-analyze-finalize",
             },
             queries,
@@ -171,6 +174,7 @@ async def run_discovery(
                 "max_links_per_page": limits.max_links_per_page,
                 "max_pages_per_seed": limits.max_pages_per_seed,
                 "max_depth": limits.max_depth,
+                "focus": focus,
                 "stop_reason": budget.stop_reason,
                 "workflow": "plan-research-analyze-finalize",
             },

@@ -14,7 +14,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-Category = Literal["award", "grant", "event", "conference"]
+# "research" is a venue that accepts submitted work — a call for papers, a
+# workshop, an industry track. It is judged on whether our work is in scope
+# rather than on stated entry conditions, which such pages do not carry.
+Category = Literal["award", "grant", "event", "conference", "research"]
 
 # Sanity bounds on cycle_year. Wide enough for a program announced well ahead,
 # tight enough that a model emitting a page number or a phone fragment fails.

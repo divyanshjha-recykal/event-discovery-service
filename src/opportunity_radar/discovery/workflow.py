@@ -12,13 +12,14 @@ from typing import Annotated, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..config import discovery_temperature
 from ..eligibility import evaluate_criteria
 from ..extraction import (
     ExtractionFailure,
     FailureReason,
+    body_is_grounded,
     build_record,
     record_warnings,
 )
@@ -39,7 +40,7 @@ from ..tracing import chat_model, stage_span, trace_handler
 from .actionability import assess_actionability, assess_completeness
 from .link_resolver import canonicalize_url, resolve_evidence_bundle
 from .profile_seed import ProfileSectionMissing, discovery_seed, profile_facts
-from .providers import tavily_search
+from .providers import SEARCH_CONTENT_CHARS, tavily_search
 from .state import (
     CandidateVerdict,
     DiscoveryState,
@@ -54,19 +55,117 @@ from .state import (
 # such calls cost one run 612 seconds. The ceiling must leave room for hidden
 # reasoning tokens too (glm-4.7-flash spends them before emitting anything), so
 # each is several times its schema's maximum rather than exactly it.
-TOKENS_PICK_LINKS = 1_024      # <=4 ints + one sentence
-TOKENS_SHORTLIST = 3_000       # <=8 picks, each an int + 300 chars
-TOKENS_PLAN = 3_000            # 10 queries with rationales
-TOKENS_ANALYZE = 16_000        # full condition lists; schema maxes near 10,400
+# These are TOTAL output budgets, and on a reasoning model the hidden reasoning
+# tokens come out of the same allowance before a single character of JSON is
+# emitted. Sized for non-reasoning models, they silently produce an EMPTY reply:
+# the model thinks until the budget is gone and returns nothing. That is what
+# killed the second planning wave on deepseek-v4.1-flash — 364 seconds of
+# reasoning against a 3,000-token ceiling, then an empty string.
+TOKENS_PICK_LINKS = 2_500      # <=4 ints + one sentence
+# <=10 ranked picks (int + 120-char title + 300-char reason) plus a 400-char
+# observation is roughly 1,300 tokens. The headroom is for reasoning tokens:
+# this call no longer runs at low effort, and under strict json_schema a reply
+# truncated mid-object is unparseable, which loses the whole ranking.
+TOKENS_SHORTLIST = 12_000
+# Wave two reads 24 result lines plus the whole profile before writing, so it
+# reasons far more than wave one — which is why wave one survived 3,000 tokens
+# and wave two did not.
+TOKENS_PLAN = 8_000            # <=6 queries with rationales
+# Schema maxes near 10,400 tokens, and 40% now goes to reasoning, so the
+# content reserve has to clear that on its own: 20,000 leaves 12,000.
+TOKENS_ANALYZE = 20_000
 
 # Traversal sizes now live on `runtime.limits`, set per run from the
 # configurator. These remain only as the fallback for callers without a runtime.
 MAX_RESEARCH_CANDIDATES = 4
 
-# Sized to hold every hit a run can produce (10 searches x 7 results), so
-# nothing is cut before the model sees it.
+# Large enough for six Tavily result sets while retaining re-plan results.
 SHORTLIST_POOL = 80
 MAX_LINKS_PER_PAGE = 2
+
+# Planning runs in two waves. The first is written blind from the profile; the
+# second is written with the first wave's results in front of it. Same number of
+# Tavily calls, one extra model call, and it is what lets the rules about query
+# shape come out of the prompt — the model can see what a query returned instead
+# of being told in advance what it would return.
+PLAN_WAVE_ONE = 2
+PLAN_WAVE_TWO = 3
+
+# What a run is looking for. Set by the operator, injected as one line into
+# planning and site selection — it steers what is searched for and never
+# rejects anything in code. Deliberately says nothing about sector, geography
+# or technology: those come from the profile, so the same text works for any
+# business whose profile is loaded.
+FOCUS_HINT = {
+    "award": (
+        "THIS RUN WANTS AWARDS. Prizes, rankings, honours and listings that "
+        "name a winner."
+    ),
+    "event": (
+        "THIS RUN WANTS EVENTS. Conferences, summits, forums and expos this "
+        "business could speak at, exhibit at or take part in."
+    ),
+    "research": (
+        "THIS RUN WANTS TECHNICAL VENUES THAT ACCEPT SUBMITTED WORK — calls "
+        "for papers, workshops, industry tracks and technical competitions. "
+        "Search the engineering described in the profile's own technology "
+        "section: the methods, models, datasets, measurements and patents. "
+        "Name the research field, never the product. Here a year IS worth "
+        "naming in some queries — unlike award bodies, conferences publish "
+        "next year's call months ahead, so the year is on the page you want."
+    ),
+}
+
+
+def _focus_line(runtime: WorkflowRuntime) -> str:
+    """The operator's chosen focus as one prompt line, or nothing."""
+    hint = FOCUS_HINT.get(runtime.focus or "any", "")
+    return f"\n{hint}\n" if hint else ""
+
+
+# How the search engine matches — the one thing the model cannot work out by
+# looking at its own results, because a result set contains no counterfactual.
+#
+# This said "three or four content words each; every extra word narrows what
+# comes back", which is how a boolean keyword engine behaves and not how Tavily
+# behaves. Tavily is semantic: it parses intent, and its own guidance is natural
+# language up to 400 characters, with longer queries doing BETTER on the
+# `advanced` depth we use. So the rule was capping queries at four words on the
+# one setting that rewards detail, and turning every search into a topic lookup.
+_QUERY_MECHANICS = """Write each query as natural language saying what you want
+to find. Not a bag of keywords.
+
+The search engine reads intent — it parses the query, identifies the entities
+and works out what kind of page would answer it. So a query that names a TOPIC
+returns everything ever written about that topic: articles about who won last
+year, pages where companies list awards they have already collected, indexes of
+events. A query that names an INTENT returns pages that do the thing.
+
+  topic:   circular economy awards India
+  intent:  circular economy awards in India that companies can enter
+
+Say who would be entering, and what state the programme should be in, when that
+helps. Phrases like open for entries, accepting nominations or call for entries
+are useful — they describe what you are looking for.
+
+Do not name a year. Measured across runs, a year in the query pulls back press
+releases and conference directories instead of programmes' own pages, because a
+programme's page often does not carry next year's number until late. Say the
+timing you want in words instead.
+
+THE ENTRANT NEVER CHANGES. Every query is looking for something THIS business
+enters. Vary how a programme is organised — the field, the kind of body, the
+kind of recognition, the market — never who it is for. A query for awards that
+designers, municipalities, government departments, FMCG brands, packaging firms,
+students or agencies enter is searching on behalf of someone else, however close
+the subject. Ask of each query: could we submit the entry?
+
+Never name the product or the product category. Search the technology and the
+field instead. Programmes are organised around disciplines and markets, so
+naming the hardware returns vendors selling the same thing.
+
+No quotation marks. Do not search for a programme the profile already names —
+we know about those."""
 
 # Per page, not per bundle. A single positional slice across the whole bundle
 # meant a long seed page consumed the entire window and the L1 pages we paid to
@@ -79,13 +178,22 @@ MIN_BUNDLE_CHARS = 400
 
 MIN_CALLS_AFTER_RESEARCH = 3
 
+# Whole-attempt ceiling for one model call, enforced by the caller, small enough
+# that a single stalled call cannot eat a 900-second run. Two of these calls read
+# far more than the others — the ranker takes the whole result pool and analyze
+# takes whole pages — so they get longer. One 180s ceiling applied to everything
+# timed out the ranker on a 26,000-token pool.
+CALL_TIMEOUT_SECONDS = 180
+HEAVY_CALL_TIMEOUT_SECONDS = 300
+HEAVY_CALLS = frozenset({"search_shortlist", "opportunity_candidate_analysis"})
+
 
 class _PlannedQueryModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
     # No "grant": this business wants recognition, not funding.
-    intent: Literal["award", "event", "conference", "mixed"]
+    intent: Literal["award", "event", "conference", "research", "mixed"]
     geography: str
     target_year: int
     rationale: str
@@ -94,7 +202,9 @@ class _PlannedQueryModel(BaseModel):
 class _QueryPlanModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    queries: list[_PlannedQueryModel] = Field(min_length=8, max_length=10)
+    # Count is asked for in the prompt, not pinned in the schema: planning now
+    # runs in two waves and the second is sized by what the first found.
+    queries: list[_PlannedQueryModel] = Field(min_length=1, max_length=6)
 
 
 # Bounded so a MAXIMAL conforming answer still fits under TOKENS_ANALYZE.
@@ -107,7 +217,7 @@ class _CandidateModel(BaseModel):
     seed_url: str = Field(max_length=500)
     source_url: str = Field(max_length=500)
     target_title: str = Field(max_length=200)
-    category: Literal["award", "grant", "event", "conference"]
+    category: Literal["award", "grant", "event", "conference", "research"]
     # The record's own values. Analyze reads the evidence once and produces the
     # whole listing; a second model call re-reading the same pages to fill these
     # in is what put six conditions and zero conditions on the same programme.
@@ -118,12 +228,23 @@ class _CandidateModel(BaseModel):
     submission_deadline: str | None = Field(default=None, max_length=32)
     deadline_note: str | None = Field(default=None, max_length=200)
     event_date: str | None = Field(default=None, max_length=32)
-    confidence_note: str = Field(default="", max_length=300)
+    confidence_note: str = Field(default="", max_length=600)
     supporting_urls: list[Annotated[str, Field(max_length=500)]] = Field(
         max_length=3
     )
     decision: Literal["pursue", "skip"]
-    reason: str = Field(max_length=400)
+    # 800, not 400: a reasoned pursue/skip runs longer than 400 characters,
+    # and because this is validated after the reply arrives, one over-long
+    # reason threw away every candidate in the bundle. ICEF was lost that way
+    # on a page that said 'open to all organizations of any kind'.
+    reason: str = Field(max_length=800)
+    # Whether a page belonging to THIS programme was actually read, or only a
+    # page that mentions it. A directory names dozens of real programmes in one
+    # line each; mining those names produced records with an invented organising
+    # body and entry conditions paraphrased from a blurb, for events nothing in
+    # the run had ever fetched a page about. A name found in a list is a lead,
+    # not a record.
+    page_belongs_to_programme: bool = True
     entry_eligibility: list[Annotated[str, Field(max_length=300)]] = Field(
         max_length=12
     )
@@ -152,13 +273,27 @@ class _ShortlistPickModel(BaseModel):
     # so a page nobody chose was fetched. Echoing the title back makes the
     # mismatch detectable instead of silent.
     title: str = Field(max_length=120)
-    reason: str = Field(max_length=300)
+    reason: str = Field(max_length=600)
 
 
 class _ShortlistModel(BaseModel):
+    """A ranked shortlist, best first — not a set of picks.
+
+    Listwise ranking (RankGPT-style permutation) rather than a score per result:
+    an LLM asked for an absolute 0-100 score invents the scale and it collapses,
+    so the numbers tie and drift between runs. Asked which of two results is
+    better it is reliable, and ordering is all the caller needs — it takes as
+    many from the top as the scrape budget allows.
+
+    `observation` is first deliberately. A rationale written before the verdict
+    forces specific evidence to surface; written after, it rationalises a choice
+    already made.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    picks: list[_ShortlistPickModel] = Field(max_length=8)
+    observation: str = Field(default="", max_length=1_200)
+    picks: list[_ShortlistPickModel] = Field(max_length=10)
 
 
 class _LinkChoiceModel(BaseModel):
@@ -182,6 +317,16 @@ def _response_text(content: object) -> str:
 
 def _parse_json(content: object) -> dict:
     text = _response_text(content).strip()
+    # An empty reply surfaced as "JSONDecodeError: Expecting value: line 1
+    # column 1 (char 0)", which reads like a malformed response and is not —
+    # the model returned nothing at all, having spent its whole output budget
+    # on reasoning tokens. Naming it points at max_tokens instead of the prompt.
+    if not text:
+        raise ValueError(
+            "model returned an empty response — it most likely exhausted its "
+            "output budget on reasoning tokens before emitting any JSON. Raise "
+            "this call's max_tokens."
+        )
     if text.startswith("```"):
         lines = text.splitlines()
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
@@ -189,6 +334,17 @@ def _parse_json(content: object) -> dict:
     if not isinstance(value, dict):
         raise ValueError("structured response was not a JSON object")
     return value
+
+
+# Share of a call's output budget a reasoning model may spend thinking. The
+# rest is reserved for the JSON, which is the only part we can use.
+#
+# Reasoning tokens are drawn from the SAME allowance as content, and a reasoning
+# model will spend whatever it is given: raising the ranking call's ceiling from
+# 6,000 to 12,000 simply produced completion_tokens=12000 of which
+# reasoning_tokens=12000 and content zero. The ceiling was never the constraint,
+# the absence of a reserve was — so bound the thinking, not the total.
+REASONING_SHARE = 0.4
 
 
 def _llm(runtime: WorkflowRuntime, *, max_tokens: int, light: bool = False):
@@ -203,17 +359,61 @@ def _llm(runtime: WorkflowRuntime, *, max_tokens: int, light: bool = False):
     # them is what exhausted the output budget, so ask for the least available.
     if light:
         kwargs["extra_body"] = {"reasoning": {"effort": "low", "exclude": True}}
+    else:
+        kwargs["extra_body"] = {
+            "reasoning": {
+                "max_tokens": max(int(max_tokens * REASONING_SHARE), 1_024),
+                "exclude": True,
+            }
+        }
     temperature = discovery_temperature()
     if temperature is not None:
         kwargs["temperature"] = temperature
     return chat_model(runtime.model, **kwargs)
 
 
+def _trim_overlong(payload: dict, exc: ValidationError) -> bool:
+    """Truncate every field that failed only on length. True if anything changed.
+
+    Covers both an over-long string and an over-long list, so a wordy answer or
+    one extra list item can never discard a call we have already paid for. A cap
+    is guidance to the model, not grounds to throw the reply away.
+    """
+    trimmed = False
+    for error in exc.errors():
+        if error["type"] not in ("string_too_long", "too_long"):
+            continue
+        limit = (error.get("ctx") or {}).get("max_length")
+        path = error["loc"]
+        if not limit or not path:
+            continue
+        node = payload
+        try:
+            for key in path[:-1]:
+                node = node[key]
+            value = node[path[-1]]
+            if isinstance(value, (str, list)):
+                node[path[-1]] = value[:limit]
+                trimmed = True
+        except (KeyError, IndexError, TypeError):
+            continue
+    return trimmed
+
+
 async def _structured(runtime: WorkflowRuntime, model_cls, name: str,
                       system: str, user: str, *, max_tokens: int,
-                      light: bool = False):
-    """One strict-JSON model call, validated into `model_cls`."""
-    response = await asyncio.to_thread(
+                      light: bool = False,
+                      salvage_key: str | None = None,
+                      salvage_model=None):
+    """One strict-JSON model call, validated into `model_cls`.
+
+    `salvage_key`/`salvage_model` name a list field whose items can be validated
+    one at a time. Without them a single malformed item discards the whole
+    reply: one candidate wrote a reason four characters over its limit and every
+    other candidate in that bundle was lost with it, including the only page
+    that stated who could enter.
+    """
+    call = asyncio.to_thread(
         _llm(runtime, max_tokens=max_tokens, light=light).invoke,
         [SystemMessage(system), HumanMessage(user)],
         config={"callbacks": [trace_handler()]},
@@ -226,7 +426,51 @@ async def _structured(runtime: WorkflowRuntime, model_cls, name: str,
             },
         },
     )
-    return model_cls.model_validate(_parse_json(response.content))
+    # A hard ceiling on the caller's side. The client's own `timeout=90` did not
+    # hold — one planning call ran 364 seconds, four times its setting, because
+    # that timeout governs the HTTP read rather than the whole attempt and a
+    # retry starts the clock again. The worker thread cannot be killed and will
+    # finish in the background, but the run stops waiting on it.
+    limit = (
+        HEAVY_CALL_TIMEOUT_SECONDS if name in HEAVY_CALLS else CALL_TIMEOUT_SECONDS
+    )
+    try:
+        response = await asyncio.wait_for(call, timeout=limit)
+    except TimeoutError as exc:
+        raise RuntimeError(f"{name} exceeded {limit}s and was abandoned") from exc
+
+    payload = _parse_json(response.content)
+    try:
+        return model_cls.model_validate(payload)
+    except ValidationError as exc:
+        # An over-long string is the model being wordy, not wrong. Trim it and
+        # revalidate rather than discard a call we have already paid for.
+        if _trim_overlong(payload, exc):
+            try:
+                return model_cls.model_validate(payload)
+            except ValidationError:
+                pass
+        if not (salvage_key and salvage_model):
+            raise
+    except Exception:
+        if not (salvage_key and salvage_model):
+            raise
+        # Keep the items that do validate. A partial analysis beats none, and
+        # the alternative is paying for a scrape and a model call and storing
+        # nothing because one field ran long.
+        kept = []
+        for item in payload.get(salvage_key) or []:
+            try:
+                kept.append(salvage_model.model_validate(item))
+            except Exception:  # noqa: BLE001 — drop only the item that is wrong
+                continue
+        if not kept:
+            raise
+        runtime.warnings.append(
+            f"{name}: kept {len(kept)} of "
+            f"{len(payload.get(salvage_key) or [])} item(s); the rest failed validation"
+        )
+        return model_cls.model_construct(**{salvage_key: kept})
 
 
 async def _record(
@@ -289,11 +533,8 @@ async def _memory(runtime: WorkflowRuntime) -> str:
 def _fallback_queries(today: date) -> list[PlannedQuery]:
     """A minimal plan built from the profile, used only when planning fails.
 
-    Every term here comes from BusinessProfile.md. An earlier version hardcoded
-    four queries naming India, the Middle East and the Gulf, plus a rationale
-    referring to a different company entirely — so a single planner exception
-    silently redirected a whole run at regions this business does not operate
-    in. A fallback that searches for the wrong company is worse than no
+    Every term here comes from BusinessProfile.md.
+    A fallback that searches for the wrong company is worse than no
     fallback, so this raises when the profile yields nothing to search on.
     """
     facts = profile_facts()
@@ -310,17 +551,21 @@ def _fallback_queries(today: date) -> list[PlannedQuery]:
     # and never a secondary market — this ran once and spent a whole run on
     # Bhutan, Mauritius and funding, none of which the LLM plan would have done.
     primary = geographies[0]
-    years = (today.year, today.year + 1)
+    # Shaped like the queries the planner is asked for: an intent in natural
+    # language, no year. This fired on the last run and wrote
+    # "reverse vending hardware awards 2026 call for entries India" — a keyword
+    # bag with a year in it, which is the pattern the planner prompt now warns
+    # against. A fallback that contradicts the instructions is a trap.
     return [
         PlannedQuery(
-            f"{sector} awards {years[index % 2]} call for entries {primary}",
+            f"{sector} awards in {primary} that companies can enter",
             "award",
             primary,
-            years[index % 2],
+            today.year,
             f"Fallback plan: {sector} is a sector the profile states, "
             f"searched in {primary}",
         )
-        for index, sector in enumerate(sectors[:4])
+        for sector in sectors[:4]
     ]
 
 
@@ -351,66 +596,34 @@ async def plan_queries_node(
         sectors = ", ".join(facts["sectors"]) or "(profile states none)"
 
         primary = facts["geographies"][0] if facts["geographies"] else "global"
-        prompt = f"""Today is {today.isoformat()}. Find awards, prizes,
-rankings, summits, conferences and forums this business could enter or take
-part in. Recognition and visibility, not funding — never search for grants,
-funding or fellowships.
+        # Deliberately short. This prompt carried about sixty lines of rules,
+        # each one added after a query went wrong once, and they were competing
+        # with each other — the guidance that mattered sat as bullet six of
+        # eight where it could not land. Most of them were standing in for an
+        # observation the model was never allowed to make, so they moved to the
+        # second wave below, which shows it what its queries actually returned.
+        # A re-plan gets the whole allowance at once: the second wave is skipped
+        # on that pass, so asking for two here would halve the retry.
+        want = (
+            PLAN_WAVE_ONE
+            if state["replan_count"] == 0
+            else PLAN_WAVE_ONE + PLAN_WAVE_TWO
+        )
+        prompt = f"""Today is {today.isoformat()}. This business wants
+recognition — awards, prizes, rankings, summits, conferences, forums. Never
+funding: no grants, no fellowships.
+{_focus_line(runtime)}
+Write {want} web searches to find programmes it could enter.
 
-Do not search only for awards. A summit that invites speakers, a conference
-with a call for papers, and an industry forum with a showcase are all worth
-finding. Spread the ten queries across these kinds, not just award programmes.
+These are the OPENING searches of a wider plan. Keep them broad — name the field
+and the kind of recognition, not a narrow slice of either. A broad opening shows
+you what is out there; you will see everything these return and write narrower
+searches afterwards. Do not try to be precise yet.
+
+{_QUERY_MECHANICS}
 
 Sectors from the profile: {sectors}
 Primary market: {primary}
-
-Write 10 searches. Seven or eight must name {primary}; the rest name no country.
-
-KEEP EACH QUERY SHORT — three or four content words. This is the most important
-rule here. A search engine returns only pages matching every word you give it,
-so each extra word narrows the results. A short query returns a wide, varied
-set; a long one returns the same small set of heavily marketed pages every run.
-
-  good:       sustainability awards {primary} {today.year}
-  good:       {primary} circular economy awards
-  good:       waste management industry awards {primary}
-  too narrow: circular economy waste management awards {primary} {today.year} call for entries
-
-Do not add entry phrases — call for entries, nominations open, entry deadline.
-Those words sit in page body text, not titles, and they cut recall for no gain.
-
-COVER DIFFERENT GROUND WITH EACH ONE. Ten wordings of a single idea is a wasted
-plan. Vary deliberately:
-- the field named: the profile's sectors, and also the broader fields they sit
-  inside — sustainability, environment, climate, ESG, innovation, technology
-- the technical ground the profile describes. Read its Technology section and
-  search on what the engineering actually is, not only on the market it serves.
-  Capabilities, methods and research areas are named by a different set of
-  programmes than sectors are, and those programmes are invisible to a query
-  about the market. Name the discipline, never the product.
-- whether a year appears at all. Use {today.year} or {today.year + 1} in only
-  some of them, never a past year. Most queries should name no year: award
-  bodies publish next year's pages late, so a query naming a future year
-  mostly returns academic conference listings that advertise years ahead
-- the kind of recognition: awards, prize, honours, summits, conferences,
-  forums and expos
-- the kind of body that runs it: industry association, chamber of commerce,
-  government, business publication. These run most awards in any market
-- technical and academic venues, one or two of the ten. Professional
-  engineering and computing bodies run conferences and workshops that take
-  submissions from industry, not only universities, and the Technology section
-  says whether this business has work they would accept — granted patents, a
-  labelled dataset, deployed models, measured results. Name the research field
-  the profile's own technology sits in and the venue type. Do not name a body:
-  which societies matter depends on the field, and the field is in the profile
-- the company stage: startup, emerging company, SME
-
-Rules:
-- No quotation marks.
-- No unexplained acronyms; they match company names instead.
-- Never name a product or hardware category. Awards are named after fields,
-  never after the equipment a company sells.
-- Do not copy a programme name out of the profile below. Searching for an award
-  we already know about discovers nothing.
 
 BUSINESS:
 {memory}
@@ -437,7 +650,7 @@ BUSINESS:
                     item.rationale,
                 )
                 for item in parsed.queries
-            ]
+            ][:want]
         except Exception as exc:  # noqa: BLE001
             planned = _fallback_queries(today)
             fallback_detail = f"{type(exc).__name__}: {exc}"[:300]
@@ -465,70 +678,184 @@ BUSINESS:
     return {"memory": memory, "planned_queries": planned}
 
 
+async def _plan_followup(
+    runtime: WorkflowRuntime,
+    already_run: list[PlannedQuery],
+    hits: list,
+    memory: str,
+    today: date,
+    want: int,
+) -> list[PlannedQuery]:
+    """The second planning wave, written with the first wave's results visible.
+
+    The whole point of the split. Planning used to write every query before
+    seeing a single result, so it could not know that a wording returned
+    directories, or that a field was already saturated. Every rule this prompt
+    does not contain is one the model can now simply observe.
+    """
+    listing = "\n".join(
+        f"  {hit.url.split('/')[2] if '://' in hit.url else hit.url}  —  "
+        f"{hit.title[:90]}"
+        for hit in hits[:24]
+    ) or "  (nothing came back)"
+    ran = "\n".join(f"  {index}. {item.query}" for index, item in enumerate(already_run, 1))
+
+    # The objective is restated here deliberately. Without it this prompt said
+    # only "reach ground these missed", and the model read that as topics
+    # missed rather than programmes missed — it went looking for policy
+    # frameworks, industry standards and pilot metrics, none of which anyone can
+    # enter. Every prompt that writes queries has to say what it is hunting.
+    prompt = f"""Today is {today.isoformat()}. You are finding recognition
+programmes this business could enter — awards, prizes, rankings, summits,
+conferences, forums. Never funding.
+
+You searched:
+{ran}
+
+These came back:
+{listing}
+{_focus_line(runtime)}
+Write {want} more searches for programmes the ones above missed.
+
+NOW GO SOMEWHERE ELSE. The searches above covered one angle; each of these
+should take a DIFFERENT angle the first ones could not reach — a different
+field, a different kind of body, a different kind of recognition, a different
+market the profile names.
+
+ONE ANGLE PER QUERY. Write these the same length and shape as the ones above:
+a single clear intent, around a dozen words. Do NOT stack attributes. A query
+listing everything this business does — its technology, its markets, its
+customers, its categories — reads as a description of the COMPANY, and returns
+documents about the sector: policy papers, project pages, consultancy
+brochures. It does not return programmes. If a query names more than one idea,
+split it into two, or drop the weaker half.
+
+Stay on the SAME hunt. Every query must still be looking for a
+programme someone can enter. Background reading is not the job: policy
+frameworks, market reports, industry standards and published metrics are not
+things this business can enter, however relevant the subject. If you find
+yourself writing a query you could not enter the answer to, you have drifted.
+
+Look at what actually came back before writing. If the results are all the same
+kind of page, all from one corner of the field, or all from bodies of one kind,
+go somewhere else. Widen a query that returned almost nothing; narrow one that
+returned the same well-known pages. The technical work described in the profile
+is named by a different set of programmes than its market is, and those are
+invisible to a query about the market.
+
+{_QUERY_MECHANICS}
+
+Do not repeat a search above.
+
+BUSINESS:
+{memory}
+"""
+    runtime.budget.consume("plan")
+    parsed = await _structured(
+        runtime,
+        _QueryPlanModel,
+        "opportunity_query_plan_followup",
+        "Return a precise search plan as JSON matching the supplied schema.",
+        prompt,
+        max_tokens=TOKENS_PLAN,
+    )
+    seen = {item.query.casefold() for item in already_run}
+    return [
+        PlannedQuery(
+            item.query, item.intent, item.geography, item.target_year, item.rationale
+        )
+        for item in parsed.queries
+        if item.query.casefold() not in seen
+    ][:want]
+
+
 _SHORTLIST_SYSTEM = (
-    "You choose which web search results are worth fetching. "
+    "You rank web search results by how much they are worth fetching. "
     "Return JSON matching the supplied schema."
 )
 
 
 async def _shortlist(
-    ranked: list, memory: str, today: date, runtime: WorkflowRuntime, want: int
-) -> list[tuple[object, str]]:
-    """Model picks which hits to research. Raises so the caller can fall back."""
+    ranked: list, memory: str, today: date, runtime: WorkflowRuntime
+) -> tuple[list[tuple[object, str]], str]:
+    """Rank the pool best-first. Raises so the caller can fall back.
+
+    Returns the whole ranked list and the model's observation about the pool;
+    the caller takes as many from the top as its scrape budget allows. An empty
+    list is a real answer — nothing here is worth fetching — not a failure.
+    """
     pool = ranked[:SHORTLIST_POOL]
     listing = "\n".join(
-        f"[{index}] {hit.title}\n     {hit.url}\n     {hit.snippet[:280]}"
+        f"[{index}] {hit.title}\n"
+        f"     {hit.url}\n"
+        f"     Query: {hit.query} · Tavily score: {hit.score:.4f}\n"
+        f"     {(hit.content or hit.snippet)[:SEARCH_CONTENT_CHARS]}"
         for index, hit in enumerate(pool)
     )
     prompt = f"""Today is {today.isoformat()}. Below are {len(pool)} web search
-results. Pick {want} to research.
+results. Put the ones worth fetching in order, best first.
 
-You are looking for pages belonging to a recognition programme this business
-could enter. A programme's landing page, its categories page, its entry or
-eligibility page are all good seeds — we follow links from whatever you pick, so
-a landing page is not worse than a deep one.
+Every result you rank near the top costs a page fetch, so this order is what
+decides where the run's budget goes. Rank at most 10.
+{_focus_line(runtime)}
+Ask three things of each result, in this order:
 
-ONE QUESTION DECIDES EACH RESULT: does the organisation behind this page RUN the
-programme, or is it writing about someone else's?
+1. WHAT KIND OF PAGE IS THIS? Decide first, because it decides everything else.
 
-  Runs it -> pick it. Newspapers, magazines, industry associations, chambers of
-  commerce and government bodies run a large share of all awards, and they host
-  those awards on their own domain. A business newspaper's awards section is
-  that programme's own site. Judge the organisation and the programme, not the
-  domain name.
+   A page belonging to ONE programme, run by the body that runs it -> this is
+   what we want. Judge the organisation, not the domain: newspapers, magazines,
+   industry associations and government bodies run a large share of all awards
+   and host them on their own site.
 
-  Writing about someone else's -> skip. A dated article reporting who won, or a
-  roundup listing many different programmes, is not a programme.
+   A news article or press release ABOUT a programme -> rank far below the
+   programme's own page. It carries no entry conditions, and the page we would
+   actually have to read is somewhere else.
 
-Also skip: editions already finished — where the snippet names a date behind
-{today.isoformat()}, or reports winners; programmes only for individuals,
-students or researchers; and grants, funding or fellowships — this business
-wants recognition, not money.
+   A directory, index or roundup LISTING MANY programmes -> rank at the bottom.
+   Conference indexes, event calendars and "top 10 awards" roundups are not
+   programmes. We do not follow links off them, so everything we could learn
+   from one is the handful of names in its own text, which is not enough to
+   act on.
 
-For each pick, the reason must say who the programme is open to, in a few words,
-from what the snippet actually shows. If it is limited to a country this business
-does not operate in, do not pick it however well the sector matches.
+2. WOULD A BUSINESS LIKE OURS BE THE ENTRANT? Judge the entrant the programme
+   wants, not the topic it covers. A programme open only to individuals,
+   students, designers or a sector this business is not in belongs near the
+   bottom, however well the words match.
 
-Spread your picks. Do not take {want} pages from one organisation, and do not
-take {want} of the same kind of award.
+3. IS IT STILL AHEAD OF US? A page reporting winners, listing finalists, or
+   naming a date already behind {today.isoformat()} is a finished edition —
+   rank it low.
 
-You have only the title, URL and snippet. Where the snippet is thin, prefer a
-programme that clearly exists over a page that merely uses the right words.
+   This question comes last on purpose. A directory of future conferences and a
+   press release announcing an open call both pass it easily, so answering it
+   first floats exactly the pages question 1 is there to sink.
 
-For every pick, copy the result's title into `title` exactly as it appears in
-the list, and make sure `index`, `title` and `reason` all describe that same
-result. A reason about a different result than the index points at means the
-wrong page is fetched.
+A programme's landing page, categories page or entry page are all good — links
+get followed from whatever is fetched, so a landing page is not worse than a
+deep one. Where a snippet is thin, prefer a programme that clearly exists over
+a page that merely uses the right words.
+
+Rank low rather than omit. Return fewer than 10 when fewer are worth any
+consideration, and an empty list when the pool holds nothing worth fetching —
+an empty list sends the run back to search, which is the right outcome for a
+bad pool and costs nothing.
 
 BUSINESS:
 {memory}
 
 RESULTS:
 {listing}
+
+Write `observation` first: what you notice about this pool as a whole. Then
+`picks`, best first. For each, copy the result's title into `title` exactly as
+it appears above, and make `index`, `title` and `reason` describe that same
+result — a reason about a different result than the index points at means the
+wrong page gets fetched. Each reason says who the programme is open to, in a
+few words, from what the snippet actually shows.
 """
     parsed = await _structured(
         runtime, _ShortlistModel, "search_shortlist", _SHORTLIST_SYSTEM, prompt,
-        max_tokens=TOKENS_SHORTLIST, light=True,
+        max_tokens=TOKENS_SHORTLIST,
     )
     chosen: list[tuple[object, str]] = []
     seen: set[int] = set()
@@ -559,7 +886,7 @@ RESULTS:
             seen.add(match)
         seen.add(pick.index)
         chosen.append((hit, pick.reason))
-    return chosen
+    return chosen, parsed.observation
 
 
 def _link_chooser(runtime: WorkflowRuntime, today: date):
@@ -643,7 +970,15 @@ async def research_node(
                     round=round_label, geography=planned.geography,
                     rationale=planned.rationale,
                     results=[
-                        {"title": i.title, "url": i.url, "snippet": i.snippet}
+                        # `content` not `snippet`: this is what the ranking call
+                        # actually reads, and the journey was showing the
+                        # shorter one, so what you could inspect was not what it
+                        # saw.
+                        {
+                            "title": i.title,
+                            "url": i.url,
+                            "snippet": i.content or i.snippet,
+                        }
                         for i in found
                     ],
                 )
@@ -658,6 +993,43 @@ async def research_node(
                 )
 
     await run_queries(state["planned_queries"], "broad")
+
+    # Second wave, written with the first wave's results in front of it. Only on
+    # the first pass: a re-plan already has the whole pool to look at, and the
+    # queries it was given were written after seeing it.
+    planned_all = list(state["planned_queries"])
+    if (
+        hits
+        and not runtime.dry_run
+        and not state["supplied_queries"]
+        and state["replan_count"] == 0
+        and runtime.budget.refusal("plan") is None
+    ):
+        try:
+            followup = await _plan_followup(
+                runtime, planned_all, hits, state["memory"], today, PLAN_WAVE_TWO
+            )
+            await _record(
+                runtime, "plan", node="research", outcome="ok",
+                detail=f"second wave, written after seeing {len(hits)} results",
+                queries=[
+                    {
+                        "query": item.query, "intent": item.intent,
+                        "geography": item.geography,
+                        "target_year": item.target_year,
+                        "rationale": item.rationale,
+                    }
+                    for item in followup
+                ],
+            )
+            planned_all.extend(followup)
+            await run_queries(followup, "informed")
+        except Exception as exc:  # noqa: BLE001 — wave one still stands on its own
+            detail = f"{type(exc).__name__}: {exc}"[:300]
+            runtime.warnings.append(f"second planning wave failed: {detail}")
+            await _record(
+                runtime, "plan", node="research", outcome="failed", detail=detail,
+            )
 
     # Order is the order the search engine returned, round-robined across
     # queries so no single query dominates. There is no keyword scoring here:
@@ -704,21 +1076,33 @@ async def research_node(
                 detail=f"skipped {skipped_dead} URL(s) earlier runs found empty",
             )
 
-    # The model chooses what to research; search-engine order only sets the order
-    # of the pool it sees. Ordering is the fallback, never the gate.
+    # The model ranks the pool best-first; search-engine order only sets the
+    # order it reads them in. Code takes the top of that ranking and does
+    # nothing else to it — no score, no threshold, no keyword test.
     picks: list[tuple[object, str]] = []
+    ranked_shortlist: list[tuple[object, str]] = []
+    shortlist_answered = False
     if ranked and not runtime.dry_run and runtime.budget.refusal("shortlist") is None:
         try:
             runtime.budget.consume("shortlist")
-            picks = await _shortlist(
-                ranked, state["memory"], today, runtime, runtime.limits.max_candidates
+            ranked_shortlist, observation = await _shortlist(
+                ranked, state["memory"], today, runtime
             )
+            shortlist_answered = True
+            picks = ranked_shortlist[:runtime.limits.max_candidates]
             await _record(
                 runtime, "shortlist", node="research", outcome="ok",
-                considered=len(ranked),
+                considered=len(ranked), observation=observation,
+                # The whole ranking is recorded, not only what was fetched, so
+                # the near-misses just below the cut are visible. Whether the
+                # good programme sat one place too low was previously
+                # unanswerable.
                 picked=[
-                    {"url": hit.url, "title": hit.title, "reason": reason}
-                    for hit, reason in picks
+                    {
+                        "url": hit.url, "title": hit.title, "reason": reason,
+                        "rank": position, "fetched": position <= len(picks),
+                    }
+                    for position, (hit, reason) in enumerate(ranked_shortlist, 1)
                 ],
             )
         except Exception as exc:  # noqa: BLE001
@@ -728,7 +1112,11 @@ async def research_node(
                 runtime, "shortlist", node="research", outcome="failed",
                 considered=len(ranked), detail=detail,
             )
-    if not picks:
+    # A shortlist that ran and returned nothing is an answer: the pool held
+    # nothing worth a fetch, and the run should search again rather than spend
+    # scrapes on the least-bad result. Falling back to search-engine order here
+    # meant declining was impossible — the top hits got fetched anyway.
+    if not picks and not shortlist_answered:
         picks = [(hit, "search-engine order (shortlist unavailable)") for hit in ranked]
 
     bundles = list(state.get("evidence_bundles", []))
@@ -748,7 +1136,12 @@ async def research_node(
             added += 1
         _ = reason
 
-    return {"search_hits": ordered, "evidence_bundles": bundles}
+    return {
+        "search_hits": ordered,
+        "evidence_bundles": bundles,
+        # Both waves, so the run's record of what it searched is complete.
+        "planned_queries": planned_all,
+    }
 
 
 def _bundle_prompt(bundle: EvidenceBundle, today: str, memory: str) -> str:
@@ -764,6 +1157,14 @@ single programme — emit ONE candidate for the umbrella programme and name the
 categories in its reason. Emit separate candidates only when each is entered
 independently, with its own conditions. Three candidates pointing at the same
 URL with the same single condition is the mistake this rule exists to prevent.
+
+This rule is about HOW MANY candidates to emit, never about whether to pursue.
+Being one umbrella programme with many categories is completely normal and is
+not a reason to skip: emit the single umbrella candidate and decide pursue or
+skip on its merits. A run once set aside a 25-category awards programme whose
+own page said anyone working toward sustainability may nominate, giving the
+reason "one umbrella programme, not 25 opportunities" — that is this rule being
+read backwards.
 
 Decide pursue or skip for each, answering two questions in this order.
 
@@ -787,8 +1188,21 @@ another category is a realistic route.
 Emit at least one decision per seed bundle — use skip when the site holds no
 relevant opportunity.
 
+WHOSE PAGE DID WE ACTUALLY READ? Set `page_belongs_to_programme` false whenever
+the pages below only MENTION this programme — a directory, index, event
+calendar or roundup that lists many different programmes, a news article, or a
+press release. Those name real programmes, but one line in a list is not enough
+to build a listing from: the organising body, the conditions and the dates all
+have to be guessed, and a guessed record is worse than none. Set it true only
+when a page belonging to this programme itself was among the pages read.
+
+A directory is not itself an opportunity either. Do not emit the index page as a
+candidate in its own right — "Waste Management Conferences 2026" run by a
+listings website is a web page, not a programme anyone enters.
+
 For every opportunity you pursue, also give its own values, read from the page:
-organizing_body (the body that runs it, not the sponsor or venue), base_title
+organizing_body (the body that runs it, named on the page; if the page names
+none, leave it empty rather than inferring one from elsewhere), base_title
 (the title with year and edition markers stripped and nothing else), cycle_year
 (the year of THIS edition), status ("open", "closed" or "unclear"),
 submission_deadline and event_date as "YYYY-MM-DD" or null, deadline_note when
@@ -798,10 +1212,21 @@ written there. The deadline's year may be taken from the page title or its
 publication date when the deadline itself gives only a day and month.
 
 ENTRY ELIGIBILITY is the heart of this. List every stated condition an entrant
-must satisfy, each as its own item, in the words the page uses. Do not
+must satisfy, each as its own item, in the words the page uses. If the page
+states no conditions, return an empty list — never a sentence saying there are
+none, and never the event's audience or attendee description. Do not
 summarise them into one line and do not invent conditions the page does not
 state. Keep judging criteria (what the entry is scored on) and application
 requirements (what must be submitted) in their own separate lists.
+
+Use category "research" for a venue that accepts submitted work — a call for
+papers, a workshop, an industry track, a technical competition. These state no
+conditions on who may enter, because anyone may; what decides whether it is
+worth entering is whether the work fits. So for a research venue, entry
+eligibility is the SCOPE: list the topics, tracks and problem areas the venue
+says it wants, each as its own item, in the page's own words. That is what gets
+judged against what this business actually works on. Submission format, page
+limits and anonymity rules are application requirements, not eligibility.
 
 Set source_url to the most specific entry, eligibility or guidelines page
 available among the pages below.
@@ -826,6 +1251,8 @@ async def _analyze_bundle(
         "Return candidate decisions as strict JSON matching the supplied schema.",
         _bundle_prompt(bundle, state["as_of_date"], state["memory"]),
         max_tokens=TOKENS_ANALYZE,
+        salvage_key="candidates",
+        salvage_model=_CandidateModel,
     )
     valid_urls = set(bundle.source_urls)
     candidates: list[CandidateVerdict] = []
@@ -836,6 +1263,17 @@ async def _analyze_bundle(
         supporting = tuple(
             url for url in item.supporting_urls if url in valid_urls
         ) or tuple(bundle.source_urls)
+        # A programme we only read ABOUT cannot be stored, whatever the analyser
+        # decided — every field of that record would be inferred from a one-line
+        # mention. Turned into a skip rather than dropped, so the lead and its
+        # reason stay visible instead of vanishing from the journey.
+        decision, reason = item.decision, item.reason
+        if decision == "pursue" and not item.page_belongs_to_programme:
+            decision = "skip"
+            reason = (
+                "only mentioned on the pages read, never its own page — the "
+                f"body, dates and conditions would all be guesses. {item.reason}"
+            )[:400]
         candidates.append(
             CandidateVerdict(
                 seed_url=bundle.seed_url,
@@ -843,8 +1281,8 @@ async def _analyze_bundle(
                 target_title=item.target_title,
                 category=item.category,
                 supporting_urls=supporting,
-                decision=item.decision,
-                reason=item.reason,
+                decision=decision,
+                reason=reason,
                 organizing_body=item.organizing_body,
                 base_title=item.base_title,
                 cycle_year=item.cycle_year,
@@ -994,6 +1432,23 @@ def route_after_analyze(
     ):
         return "replan"
     return "finalize"
+
+
+def _feasibility_context(result) -> str:
+    """What the eligibility call is being asked to judge.
+
+    A research venue's conditions are its scope, not entry rules, so it is told
+    that rather than left to infer it from topic strings that read nothing like
+    an eligibility list.
+    """
+    context = f"{result.title} — {result.organizing_body}"
+    if result.category == "research":
+        return (
+            f"{context} (a venue that accepts submitted work; the conditions "
+            "below are the topics it wants, so judge whether this business has "
+            "work that fits)"
+        )
+    return context
 
 
 async def finalize_node(
@@ -1165,14 +1620,24 @@ async def finalize_node(
             )
             continue
 
-        # A record with no entry conditions is real but not yet usable: the
-        # eligibility stage has nothing to judge, so counting it as the run's
-        # product overstates what was found. Stored, flagged, counted apart.
-        usable = bool(result.eligibility_criteria)
+        # A record with nothing for the eligibility stage to judge is real but
+        # not finished: counting it as the run's product overstates what was
+        # found. Stored, flagged, counted apart. The same test serves every
+        # category because analyze puts a research venue's scope in the same
+        # field an award's entry conditions go in — that scope is what gets
+        # judged, so a call for papers is complete on its own terms rather than
+        # filed as thin for lacking conditions it was never going to state.
+        grounded = body_is_grounded(result.organizing_body, evidence_text)
+        if not grounded:
+            runtime.warnings.append(
+                f"{candidate.source_url}: organizing_body "
+                f"{result.organizing_body!r} does not appear in the page"
+            )
+        ready = bool(result.eligibility_criteria) and grounded
         payload = result.model_dump()
         payload.update(
             {
-                "record_state": "ready" if usable else "needs_deeper_read",
+                "record_state": "ready" if ready else "needs_deeper_read",
                 "unfollowed_links": list(bundle.unfollowed[:20]),
                 "actionability": "actionable",
                 "evidence_urls": bundle.source_urls,
@@ -1191,7 +1656,7 @@ async def finalize_node(
             payload["dry_run"] = True
             payload["synthetic"] = "DRY-RUN FIXTURE — not a real opportunity"
         saved = await save_opportunity(runtime.db, payload)
-        if usable:
+        if ready:
             runtime.saved.append(candidate.source_url)
             await clear_dead_end(runtime.db, candidate.source_url)
         else:
@@ -1216,14 +1681,17 @@ async def finalize_node(
         # "succeeded" before anything had been judged, and a failure here was
         # invisible in the journey. Free of the budget, like saving: it only
         # ever runs on a record already paid for.
-        if usable:
+        if ready:
             try:
-                verdict = await asyncio.to_thread(
-                    evaluate_criteria,
-                    list(result.eligibility_criteria),
-                    runtime.profile_text,
-                    f"{result.title} — {result.organizing_body}",
-                    runtime.model,
+                verdict = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        evaluate_criteria,
+                        list(result.eligibility_criteria),
+                        runtime.profile_text,
+                        _feasibility_context(result),
+                        runtime.model,
+                    ),
+                    timeout=HEAVY_CALL_TIMEOUT_SECONDS,
                 )
                 await attach_eligibility(
                     runtime.db,

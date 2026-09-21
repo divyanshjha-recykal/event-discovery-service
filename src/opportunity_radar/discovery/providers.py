@@ -13,10 +13,24 @@ from .state import EvidencePage, SearchHit
 # only to stop a pathological directory listing dominating the bundle.
 MAX_PAGE_CHARS = 200_000
 
-# Per search result, for the site-selection call only. Bounded tightly: this is
-# multiplied by the whole candidate pool, and the aim is enough text to tell a
-# real entry page from marketing copy, not the whole document.
-SEARCH_CONTENT_CHARS = 1_200
+# Caller-side ceilings on the two provider calls. Both run in a worker thread,
+# and a thread that never returns is invisible to the budget: the wall clock is
+# only checked BETWEEN tool calls, so one stalled request hangs the entire run
+# with no limit able to fire and no way for Stop to take effect — Stop sets a
+# flag that is read at the next tool call, which never arrives.
+#
+# The `timeout` handed to Firecrawl is its server-side scrape limit, not an HTTP
+# read timeout, so it does not cover a stalled connection. This does. The worker
+# thread cannot be killed and finishes in the background; the run stops waiting.
+SEARCH_TIMEOUT_SECONDS = 90
+SCRAPE_TIMEOUT_SECONDS = 180
+
+# Per search result, for the site-selection call only. Multiplied by the whole
+# pool, so at 35 results this is roughly 21k tokens of listing — affordable, and
+# the aim is enough text to tell a real entry page from a press release about
+# one. Raised from 1,200 once the pool shrank from 70 results to 35: the budget
+# freed by searching less buys more to read about each result.
+SEARCH_CONTENT_CHARS = 2_400
 
 # Never worth a search slot: these host no entry pages.
 EXCLUDED_DOMAINS = (
@@ -64,28 +78,41 @@ async def tavily_search(
     # No `country`: measured against live queries it never biased toward the
     # named market, and combined with the market in the query text it returned
     # zero results. Geography belongs in the query text, which does work.
-    payload = await asyncio.to_thread(
+    search = asyncio.to_thread(
         client.search,
         query,
         max_results=max_results,
         search_depth="advanced",
+        chunks_per_source=3,
         exclude_domains=list(EXCLUDED_DOMAINS),
         # Deliberately NOT include_raw_content: `raw_content` is the whole page
         # from the top, which on an award site is navigation and hero banner.
         # `content` below is Tavily's relevance-selected extract — the part that
         # actually matches the query. Swapping one for the other cost a run.
     )
-    return [
-        SearchHit(
-            title=str(item.get("title") or "(no title)"),
-            url=str(item.get("url") or ""),
-            snippet=str(item.get("content") or "")[:800],
-            query=query,
-            score=float(item.get("score") or 0.0),
+    try:
+        payload = await asyncio.wait_for(search, timeout=SEARCH_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"Tavily search exceeded {SEARCH_TIMEOUT_SECONDS}s and was abandoned"
+        ) from exc
+
+    hits: list[SearchHit] = []
+    for item in payload.get("results", []):
+        if not item.get("url"):
+            continue
+        content = str(item.get("content") or "")
+        hits.append(
+            SearchHit(
+                title=str(item.get("title") or "(no title)"),
+                url=str(item.get("url") or ""),
+                snippet=content[:800],
+                query=query,
+                score=float(item.get("score") or 0.0),
+                content=content[:SEARCH_CONTENT_CHARS],
+            )
         )
-        for item in payload.get("results", [])
-        if item.get("url")
-    ]
+    return hits
 
 
 def _metadata_dict(doc: Any) -> dict[str, Any]:
@@ -154,7 +181,16 @@ async def firecrawl_fetch(
     }
     if wait_for:
         kwargs["wait_for"] = wait_for
-    doc = await asyncio.to_thread(client.scrape, url, **kwargs)
+    try:
+        doc = await asyncio.wait_for(
+            asyncio.to_thread(client.scrape, url, **kwargs),
+            timeout=SCRAPE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"Firecrawl scrape exceeded {SCRAPE_TIMEOUT_SECONDS}s and was "
+            f"abandoned: {url}"
+        ) from exc
     markdown = str(
         getattr(doc, "markdown", None) or getattr(doc, "content", "") or ""
     )

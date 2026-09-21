@@ -1,0 +1,149 @@
+{
+  "run_id": "70386a",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "focus": "award",
+  "captured": "2026-09-20",
+  "note": "Real Tavily results from run 70386a, recovered from the run's own journey output after the database was cleared. Contains reference positives P3, P6, P7 and negatives N4, N8 — so a replay can measure both recall and precision against reference/candidates.csv.",
+  "queries": [
+    {
+      "query": "awards and prizes in India open for entries that recognise circular economy, recycling and waste management companies",
+      "rationale": "Broad opening on the award landscape for circular economy and waste-tech in India, to surface programmes a reverse vending and DRS company could enter."
+    },
+    {
+      "query": "recognition programmes accepting nominations for climate tech and sustainability innovators in India",
+      "rationale": "Second broad sweep across climate/sustainability honours, rankings and listings that name winners, without narrowing to a specific sub-sector or programme."
+    },
+    {
+      "query": "UK recycling and waste management awards open for entries from technology providers",
+      "rationale": "Second wave. Secondary market the profile names."
+    }
+  ],
+  "results": [
+    {
+      "query": "awards and prizes in India open for entries that recognise circular economy, recycling and waste management companies",
+      "title": "2025 Recycling and Waste Management Awards - Altaris Business Awards",
+      "url": "https://altarisbusinessawards.com/recycling-and-waste-management-awards",
+      "snippet": "Enter the 2025 Recycling and Waste Management Awards and showcase your environmental leadership on the international stage. These awards recognize organizations pioneering innovative solutions for waste reduction, circular economy initiatives, and sustainable resource management. Altaris Business Awards celebrates the companies and technologies creating measurable environmental impact worldwide. Submit your entry to highlight your achievements before a global audience of industry leaders, policymakers, and potential partners. The awards honor excellence across all specialties from materials recovery to zero-waste strategies. ## 2025 Recycling and Waste Management Awards Entry Form #### Entries Close 25th December 2025 ## You only pay a fee if you win an award. If you enter an award sector with Altaris Business Awards and win, you pay an Award Acceptance Fee, then enjoy a raft of benefits for winning."
+    },
+    {
+      "query": "awards and prizes in India open for entries that recognise circular economy, recycling and waste management companies",
+      "title": "ICEF 2026 | Prestigious India Circular Economy Forum | ICCE",
+      "url": "https://ic-ce.com/icef-2026",
+      "snippet": "## Who can apply? This award is open to all organizations taking a 'circular economy' approach to overall organizational, site or project specific resources. The winning entry of this circular economy award will consider all aspects of not only waste reduction and recycling but will take a holistic approach to 'The 5 R's' where relevant Refuse, Reduce, Reuse, Repurpose and Recycle and will include supply chain integration and collaborative working. ## Award Categories Enterprise Awards, Higher Education, K-12 Schools. ACE is open to all organizations of any kind companies large, small, medium and micro, charities, not-for-profits, social enterprises, NGOs, membership and accreditation organizations and government departments including the Urban Local bodies. ## 20-21st Aug 2026 | New Delhi, India ## Awards 5th Edition Recognizing excellence in circular economy initiative across India."
+    },
+    {
+      "query": "awards and prizes in India open for entries that recognise circular economy, recycling and waste management companies",
+      "title": "A' Circular Economy and Waste Reduction Design Awards 2026 Call for Entries Announced | Press Releases | kdhnews.com",
+      "url": "https://kdhnews.com/online_features/press_releases/a-circular-economy-and-waste-reduction-design-awards-2026-call-for-entries-announced",
+      "snippet": "Circular Economy Awards Timeline & Eligibility Deadline for entries to A' Circular Economy and Waste Reduction Design Awards is on September 30, 2026. Results will be announced on May 1, 2027. COMO, CO, ITALY, September 12, 2026 /EINPresswire.com/ -- Today, A' Design Award & Competition has released its call for entries. The A' Circular Economy and Waste Reduction Design Awards are open for entries by Circular Economy Designers, Waste Management Consultants, Industrial Designers, Product Designers, Material Scientists, Sustainable Product Manufacturers, Eco-friendly Packaging Specialists, Recycling Facility Designers, Bio-material Experts, Environmental Policy Consultants, Supply Chain Strategists, Resource Management Consultants, Circular Economy Brands, Circular Economy Manufacturers worldwide."
+    },
+    {
+      "query": "awards and prizes in India open for entries that recognise circular economy, recycling and waste management companies",
+      "title": "6th Edition | Plastic Recycling Conference Asia 2026 | 29-30 April | PolyMint",
+      "url": "https://prca.polymint.co/awards",
+      "snippet": "##### ABOUT ## THE INITIATIVE In order to recognize the initiators of innovative work and achievements across plastics, we proudly announce the edition of the Plastic Recycling Excellence Awards 2026, now expanding its scope to cover these key recycling sectors. The objective of these awards is to motivate industry leaders to enhance their contributions towards sustainability, innovation, and environmental responsibility. The awards will acknowledge companies and institutions who have demonstrated exceptional work in recycling, waste management, and circular economy initiatives. Nominate your organization in as many as 10 categories. 30 awards across 10 categories. ##### Award ## CATEGORIES Organisation Of The Year, EPR Champion Brand, Innovative Packaging Champion, Recycling Facility Champion, Best NGO Of The Year In Public Awareness, Women Leader In Waste Management, Best Recycled / Upcycled Product Of The Year, Emerging Startups In Waste Management, Local Body Champion, Sustainable MRF Operations Champion."
+    },
+    {
+      "query": "awards and prizes in India open for entries that recognise circular economy, recycling and waste management companies",
+      "title": "TOI Ecopreneur Awards",
+      "url": "https://ecopreneur.timesofindia.com/toi/ecopreneur-awards",
+      "snippet": "## Industry Collaborators ## Award Categories 25 categories celebrating every dimension of sustainable business ### EcoTech & Climate Innovation ### Sustainable Mobility & EV Ecosystem ### Green Gadgets & Consumer Electronics ### Circular Economy & Recycling ### Packaging Innovation ### Food & Agriculture Sustainability ### Water Conservation & Management ### Sustainable Fashion & Textiles. ## Mark Your Calendar The Journey to Recognition ### Awards Launch & Nominations Open. ### Nominations Close Final call for entries. ### Expert Jury Evaluation. Any individual, start-up, SME, enterprise, or organization working toward sustainability can nominate. From clean technology and electric mobility to sustainable agriculture, green pharma innovations, and circular waste solutions."
+    },
+    {
+      "query": "awards and prizes in India open for entries that recognise circular economy, recycling and waste management companies",
+      "title": "PolyNext Conference | Plastic Recycling & Awards",
+      "url": "https://polynextconf.com",
+      "snippet": "The PolyNext Awards recognise the people and organisations advancing plastic recycling, circular design, sustainable materials and waste management. Winners are announced at the PolyNext Conference."
+    },
+    {
+      "query": "awards and prizes in India open for entries that recognise circular economy, recycling and waste management companies",
+      "title": "[PDF] INDIA CIRCULAR ECONOMY AWARDS - Epic Content & Design",
+      "url": "https://epiccontentanddesign.com/mock/rei/wp-content/uploads/india-circular-economy-awards.pdf",
+      "snippet": "Showcase your innovations and initiatives and get recognized as a Circular Economy Pioneer. Share best practices and learn from peers."
+    },
+    {
+      "query": "recognition programmes accepting nominations for climate tech and sustainability innovators in India",
+      "title": "India Green Awards 2025 | India's #1 Sustainability & ESG Awards",
+      "url": "https://www.indiagreenawards.com",
+      "snippet": "Nominate Now. # India's Most Prestigious Sustainability & Green Leadership Awards. Celebrating innovation, commitment, and impact in the fields of environment, climate action, ESG, and clean technology. From startups to institutions India Green Awards brings together the leaders shaping a more sustainable India. ##### About Us ## About the India Green Awards. The India Green Awards stand as one of the nation's foremost recognitions in the field of environmental achievement, shining a spotlight on exceptional contributions across sustainability, climate innovation, ESG frameworks, eco-friendly construction, renewable energy adoption, and effective waste management. ##### Nomination Process. A non-refundable processing fee applies based on category and organization size."
+    },
+    {
+      "query": "recognition programmes accepting nominations for climate tech and sustainability innovators in India",
+      "title": "TOI Ecopreneur Awards - The Times of India",
+      "url": "https://ecopreneur.timesofindia.com/toi/ecopreneur-awards",
+      "snippet": "## Celebrating Sustainable Business Excellence Recognising Eco-First Businesses, Climate Innovators, Purpose-Led Brands, and Sustainable Leaders in Agriculture and Pharma Across India. India's first and only platform celebrating businesses that dare to put the planet first. The Times Internet Ecopreneurs Awards honours bold visionaries from groundbreaking climate-positive startups to established enterprises. ### Why Nominate? National Recognition. Credible Validation. Media Amplification. Network Access. Competitive Edge."
+    },
+    {
+      "query": "recognition programmes accepting nominations for climate tech and sustainability innovators in India",
+      "title": "BW Sustainable World Awards 2026 - BW Businessworld",
+      "url": "https://bwevents.co.in/bwsustainability/bw-sustainable-world-awards-2026",
+      "snippet": "BW SUSTAINABLE WORLD ## BW Sustainable World Awards 2026 Celebrating Leadership, Innovation & Impact for a Regenerative Future CLICK HERE TO NOMINATE. The BW Sustainable World Awards 2026, part of the Sustainable World Conclave Mumbai Chapter, celebrate the changemakers leading India's sustainability transformation. The 2026 edition expands its scope to include new-age enterprises, startups, and tech innovators. ## Who Should Apply? Applications are open to: 01 Corporates & Large Enterprises leading in ESG transformation 02 Startups & MSMEs with sustainability-driven innovations 03 Tech & AI Companies enabling climate, energy, or social impact. 1. Online Nomination Form. 2. Screening & Shortlisting. 3. Jury Interaction Round. 4. Final Selection & Recognition."
+    },
+    {
+      "query": "recognition programmes accepting nominations for climate tech and sustainability innovators in India",
+      "title": "Top Environmental Awards in India | Sustainability & Green Leadership",
+      "url": "https://www.indiagreenawards.com/top-environmental-awards-in-india",
+      "snippet": "## Sustainability Awards and Climate Responsibility Many sustainability awards india are aligned with international sustainability benchmarks, particularly the United Nations Sustainable Development Goals. These recognitions assess how initiatives contribute to responsible consumption, clean energy adoption, climate resilience, and social inclusion. ## Environmental Recognition Programs and Knowledge Sharing Beyond awards, environmental recognition programs india often function as platforms for collaboration and learning. ## Why Environmental Awards Matter in India India faces complex environmental challenges, from air and water pollution to waste management and climate vulnerability."
+    },
+    {
+      "query": "recognition programmes accepting nominations for climate tech and sustainability innovators in India",
+      "title": "Bharat ESG Awards 2026 — Inaugural Edition",
+      "url": "https://www.bharatesg.org",
+      "snippet": "ESG Innovation by a Startup For early-stage companies building technology, products or services that directly advance an Environmental, Social or Governance outcome at meaningful scale in India. Special Recognition ## Lifetime & Special Honours. ## Setting India's Gold Standard for Responsible Business. The Bharat ESG Awards is India's most authoritative recognition platform dedicated to honouring organisations and individuals who are redefining responsible business through measurable Environmental, Social and Governance impact. From large corporates to nimble startups, public undertakings to independent professionals. Who Can Apply ## Eligibility & Evaluation Criteria Eligible Applicants: Listed and unlisted corporates operating in India, Corporate Sector Organisations private and public, Small and Medium Enterprises (SMEs), Non-Governmental Organisations (NGOs) and Foundations, Startups registered and operating in India, academic and research institutions, industry associations and multilateral bodies, Individual professionals, Foreign companies with significant India operations. Phase 1 Screening Free."
+    },
+    {
+      "query": "recognition programmes accepting nominations for climate tech and sustainability innovators in India",
+      "title": "Global Sustainability & Innovation Awards 2026 | Water & Environment Excellence",
+      "url": "https://eawater.com/awards",
+      "snippet": "Now, we're elevating that journey with the world's most premium recognition platform for water and sustainability. Join us apply, explore, or witness leadership in action at our Awards Night in SAMVET Auditorium (G), IGNCA, Janpath, New Delhi on March 24th 2026. ### The Vision Water is essential to life, and innovation defines our future. ### Our Legacy Since 2000, EverythingAboutWater has advanced knowledge across India's water sector. From publications to on-ground initiatives, we've delivered 500+ exhibitions, conferences, seminars, and trainings."
+    },
+    {
+      "query": "recognition programmes accepting nominations for climate tech and sustainability innovators in India",
+      "title": "About Carbelim",
+      "url": "https://carbelim.io/about-carbelim",
+      "snippet": "A comprehensive showcase of institutional backing, accelerator validation, international recognition, and climate innovation leadership across India, UAE, Japan."
+    },
+    {
+      "query": "UK recycling and waste management awards open for entries from technology providers",
+      "title": "UK – Waste Management Contracts - bidstats",
+      "url": "https://bidstats.uk/tenders?q=waste+management&scope=keyfields",
+      "snippet": "technology award: Bartec Municipal Technologies SME. Sep 2026 Closed: Sun 28 Jun 2026 Direct award via G Cloud 14 technology award: Whitespace Work Software. UK Tender Notices."
+    },
+    {
+      "query": "UK recycling and waste management awards open for entries from technology providers",
+      "title": "Awards for Excellence 2027 | Recycling & Waste Awards",
+      "url": "https://www.awardsforexcellence.co.uk",
+      "snippet": "# Entries open soon! Every year, the Awards for Excellence brings the UK's recycling and waste management sector together to recognise the projects, partnerships, teams and people raising the bar. Get ready entries for 2027 open shortly, and it's completely free to put your work forward. REGISTER YOUR INTEREST. VIEW THE 2027 CATEGORIES. 1,000+ Attendees. 25 Categories. Free to enter, every category. 23 years running. ## Why Enter Because the work your team does deserves to be seen. Judged by an independent panel of sector experts. ## 25 categories to choose from From local authority partnerships to AI and technology, circular economy and rising talent there's a category built around the work you actually do. ## The Categories 25 categories. Circular Economy Success. Innovation of the Year. AI or Technology of the Year. Best Local Authority Recycling Initiative."
+    },
+    {
+      "query": "UK recycling and waste management awards open for entries from technology providers",
+      "title": "2025 Recycling and Waste Management Awards",
+      "url": "https://altarisbusinessawards.com/recycling-and-waste-management-awards",
+      "snippet": "Enter now to position your sustainability initiatives among the world's most effective environmental solutions. ### Awards Fees ### Entry Form ## Awards Entry Closing: 25th December 2025 ## Awards Entries Opening Soon! REMIND ME! ## Free entry in all sectors and categories. We know that many small business owners, entrepreneurs and larger organisations don't like to pay up front for awards, where fees range from 99 to more than 200 per category. With us, all your entries are free. ## You only pay a fee if you win an award."
+    },
+    {
+      "query": "UK recycling and waste management awards open for entries from technology providers",
+      "title": "Recycling & Waste Management Awards - BUILD Magazine",
+      "url": "https://www.build-review.com/awards/recycling-waste-management-awards",
+      "snippet": "BUILD is proud to place live our Recycling and Waste Management Awards, running for the fifth consecutive year! The awards themselves are free to enter."
+    },
+    {
+      "query": "UK recycling and waste management awards open for entries from technology providers",
+      "title": "Enter now - National Recycling Awards 2026",
+      "url": "https://nra.mrw.co.uk/NRAW2026/en/page/enter-now",
+      "snippet": "The entry deadline for the National Recycling Awards is 10 July 2026. The winners will be announced at Royal Lancaster Hotel, London on 1 December 2026."
+    },
+    {
+      "query": "UK recycling and waste management awards open for entries from technology providers",
+      "title": "Waste Management Awards - Ascent Events",
+      "url": "https://ascentevents.co.uk/wma-awards",
+      "snippet": "Summary: In 2025, Royal Surrey County Hospital turned the tide on food waste not just through technology, but by putting patients, people, and the planet at the heart of its kitchen. Acknowledging the team or individual that has spearheaded an outstanding recycling initiative within the healthcare sector, contributing significantly to waste diversion and sustainability goals. Recognising projects that use technology, analytics, or data-driven solutions to track, reduce, or optimise waste management practices across healthcare settings. AWARD SUBMISSION By completing a submission, you are agreeing to the T&Cs of the Awards for Excellence in Waste Management. ## Our Expert Team of Judges."
+    },
+    {
+      "query": "UK recycling and waste management awards open for entries from technology providers",
+      "title": "2026 Recycling and Waste Management Awards",
+      "url": "https://business-awards.uk/recycling-and-waste-management-awards",
+      "snippet": "Entries Close: 30th July 2026. Email: info@business-awards.uk. In most cases, the awards will be announced 30 days after the final deadline date."
+    }
+  ]
+}
