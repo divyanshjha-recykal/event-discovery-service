@@ -22,7 +22,14 @@ from ..tracing import chat_model, stage_span, trace_handler
 from .schema import CriterionResult, EligibilityResult, QualitativeNote
 from .scoring import audit_classification, compute_score, derive_confidence
 
-MAX_OUTPUT_TOKENS = 4096
+# One verdict plus reasoning per condition, and a record can carry twelve. At
+# 4,096 the richest record was the one that failed: the more conditions a page
+# states, the more output the judgement needs.
+MAX_OUTPUT_TOKENS = 12_000
+
+# Reasoning is drawn from the same allowance as the answer, so cap it or a
+# reasoning model spends the lot thinking and returns nothing.
+REASONING_SHARE = 0.4
 
 SYSTEM_PROMPT = """\
 You judge whether a company meets each eligibility condition of an award, \
@@ -135,7 +142,18 @@ def _evaluate(
     span,
 ) -> EligibilityResult:
 
-    llm = chat_model(model, max_tokens=MAX_OUTPUT_TOKENS, timeout=120, max_retries=3)
+    llm = chat_model(
+        model,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        timeout=120,
+        max_retries=3,
+        extra_body={
+            "reasoning": {
+                "max_tokens": max(int(MAX_OUTPUT_TOKENS * REASONING_SHARE), 1_024),
+                "exclude": True,
+            }
+        },
+    )
     handler = trace_handler()
     messages = [
         SystemMessage(SYSTEM_PROMPT),

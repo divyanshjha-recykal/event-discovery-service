@@ -30,8 +30,7 @@ DISCOVERY_SECTIONS = (
 )
 
 
-class ProfileSectionMissing(RuntimeError):
-    """A named section is no longer in the profile — the distillation is stale."""
+from ..profile import ProfileSectionMissing  # noqa: E402
 
 
 def _sections(text: str) -> dict[str, str]:

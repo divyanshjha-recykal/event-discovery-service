@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { DEFAULT_CONFIG, FOCUS, estimateCalls, runLabel, runStatus, shortId } from '../api.js'
+import { DEFAULT_CONFIG, FOCUS, SEARCH_PROVIDERS, estimateCalls, runLabel, runStatus, shortId } from '../api.js'
 import { IconChevron, IconMoon, IconPlay, IconSun, IconTrash } from '../icons.jsx'
 
 // Suggestions only — the field is free text so any OpenRouter model id works,
@@ -120,6 +120,26 @@ export default function Sidebar({
       </section>
 
       <section className="side-block">
+        <h4>Search with</h4>
+        <div className="focus-picker">
+          {SEARCH_PROVIDERS.map(([value, label, hint]) => (
+            <button
+              key={value}
+              type="button"
+              title={hint}
+              className={`focus-opt${(config.search_provider || 'exa') === value ? ' on' : ''}`}
+              onClick={() => setConfig({ ...config, search_provider: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="hint">
+          {(SEARCH_PROVIDERS.find(([v]) => v === (config.search_provider || 'exa')) || [])[2]}
+        </p>
+      </section>
+
+      <section className="side-block">
         <h4>Budget caps</h4>
         {CAPS.map(([key, label, min, max, hint]) => (
           <label className="field" key={key} title={hint}>
@@ -128,7 +148,7 @@ export default function Sidebar({
           </label>
         ))}
         <button className="link-btn" type="button"
-                onClick={() => setConfig({ ...config, ...DEFAULT_CONFIG, model: config.model, focus: config.focus })}>
+                onClick={() => setConfig({ ...config, ...DEFAULT_CONFIG, model: config.model, focus: config.focus, search_provider: config.search_provider })}>
           Reset caps to defaults
         </button>
       </section>

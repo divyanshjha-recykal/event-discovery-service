@@ -15,3 +15,7 @@ node_modules
 
 # OS
 .DS_Store
+
+# Exported reports
+opportunities.csv
+*.report.csv

@@ -15,7 +15,7 @@ from urllib.parse import (
     urlunsplit,
 )
 
-from .providers import firecrawl_fetch
+from .providers import tool_firecrawl_fetch
 from .state import EvidenceBundle, EvidencePage, SearchHit, WorkflowRuntime
 
 _MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
@@ -73,6 +73,17 @@ def canonicalize_url(url: str) -> str:
     )
     scheme = "https" if parsed.scheme in {"http", "https"} else parsed.scheme
     return urlunsplit((scheme, netloc, path, query, ""))
+
+
+_URL = re.compile(r"https?://\S+")
+#: A seed page shorter than this is too thin to call a duplicate.
+SEED_KEY_CHARS = 500
+
+
+def content_key(text: str, min_chars: int) -> str:
+    """Text two copies of one page share, URLs removed; empty if too short to tell."""
+    key = " ".join(_URL.sub("", text or "").split()).casefold()
+    return key if len(key) >= min_chars else ""
 
 
 def _candidate_links(page: EvidencePage, seed_url: str) -> list[tuple[str, str]]:
@@ -143,18 +154,18 @@ async def resolve_evidence_bundle(
             break
         runtime.budget.consume("scrape")
         try:
-            page = await firecrawl_fetch(
+            page = await tool_firecrawl_fetch(
                 url, depth=depth, dry_run=runtime.dry_run
             )
             page = replace(page, url=canonicalize_url(page.url))
         except Exception as exc:  # noqa: BLE001
             await record_event(
                 "scrape",
-                node="research",
+                node="fetch",
                 url=url,
                 depth=depth,
-                outcome="failed",
-                detail=f"{type(exc).__name__}: {exc}"[:300],
+                outcome="failed", source="firecrawl",
+                detail=f"{type(exc).__name__}: {exc}"[:1500],
             )
             continue
 
@@ -167,7 +178,7 @@ async def resolve_evidence_bundle(
         ):
             try:
                 runtime.budget.consume("scrape")
-                fallback = await firecrawl_fetch(
+                fallback = await tool_firecrawl_fetch(
                     url,
                     depth=depth,
                     dry_run=runtime.dry_run,
@@ -182,7 +193,7 @@ async def resolve_evidence_bundle(
         pages.append(page)
         await record_event(
             "scrape",
-            node="research",
+            node="fetch",
             url=page.url,
             depth=depth,
             outcome="ok",
@@ -197,6 +208,17 @@ async def resolve_evidence_bundle(
             preview=page.markdown[:SCRAPE_PREVIEW_CHARS],
             truncated=len(page.markdown) > SCRAPE_PREVIEW_CHARS,
         )
+        if depth == 0:
+            key = content_key(page.markdown, SEED_KEY_CHARS)
+            twin = runtime.seen_pages.get(key) if key else None
+            if twin and twin != page.url:
+                await record_event(
+                    "dedupe", node="fetch", url=page.url, outcome="dropped",
+                    title=page.title, duplicate_of=twin,
+                )
+                return EvidenceBundle(seed_url=seed_url, pages=(), duplicate_of=twin)
+            if key:
+                runtime.seen_pages[key] = page.url
         if depth >= max_depth:
             continue
         candidates = [
@@ -215,8 +237,8 @@ async def resolve_evidence_bundle(
             followed = await choose_links(page, candidates[:40])
         except Exception as exc:  # noqa: BLE001
             await record_event(
-                "select_links", node="research", url=page.url,
-                outcome="failed", detail=f"{type(exc).__name__}: {exc}"[:200],
+                "select_links", node="fetch", url=page.url,
+                outcome="failed", detail=f"{type(exc).__name__}: {exc}"[:1000],
             )
         followed = followed[: max_pages - len(pages)]
         unfollowed.update(url for url, _ in candidates if url not in followed)

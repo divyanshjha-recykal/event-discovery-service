@@ -166,15 +166,16 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
     needs_deeper: counts.needs_deeper ?? 0,
     set_aside: counts.rejected ?? 0,
   }
-  const ready = saved.filter((o) => o.record_state !== 'needs_deeper_read')
-  const thin = saved.filter((o) => o.record_state === 'needs_deeper_read')
+  // Ready first, then the ones that need more evidence.
+  const found = [...saved].sort(
+    (a, b) => (a.record_state === 'needs_deeper_read') - (b.record_state === 'needs_deeper_read'),
+  )
 
-  // Counts per kind, commonest first, so the chips read as a summary of what
-  // the run actually found rather than a fixed set of categories.
+  // Counts per kind, commonest first.
   const kinds = Object.entries(
-    ready.reduce((acc, o) => ({ ...acc, [o.category]: (acc[o.category] || 0) + 1 }), {}),
+    found.reduce((acc, o) => ({ ...acc, [o.category]: (acc[o.category] || 0) + 1 }), {}),
   ).sort((a, b) => b[1] - a[1])
-  const shown = kind === 'all' ? ready : ready.filter((o) => o.category === kind)
+  const shown = kind === 'all' ? found : found.filter((o) => o.category === kind)
 
   return (
     <>
@@ -247,11 +248,7 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
       <div className="tabs">
         {[
           ['journey', `Journey (${events.length})`],
-          // Results means "you can act on this". A record with no entry
-          // conditions is an unfinished lead, not a result, and mixing the two
-          // invites the obvious question: why are you showing me this?
-          ['opportunities', `Results (${totals.ready})`],
-          ['thin', `Needs more evidence (${totals.needs_deeper})`],
+          ['opportunities', `Results (${totals.ready + totals.needs_deeper})`],
           ['aside', `Set aside (${totals.set_aside})`],
         ].map(([key, label]) => (
           <button key={key} type="button"
@@ -264,18 +261,18 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
 
       <div className="card">
         {tab === 'journey' && (
-          <Journey run={run} events={events} saved={ready} thin={thin} live={running} />
+          <Journey run={run} events={events} saved={found} totals={totals} live={running} />
         )}
 
         {tab === 'opportunities' && (
-          ready.length ? (
+          found.length ? (
             <>
               {kinds.length > 1 && (
                 <div className="kind-filter">
                   <button type="button"
                           className={`focus-opt${kind === 'all' ? ' on' : ''}`}
                           onClick={() => setKind('all')}>
-                    All {ready.length}
+                    All {found.length}
                   </button>
                   {kinds.map(([key, count]) => (
                     <button key={key} type="button"
@@ -303,29 +300,7 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
             </>
           ) : (
             <p className="muted tight">
-              {running
-                ? 'Nothing ready yet.'
-                : 'No opportunity from this run had entry conditions to judge.'}
-            </p>
-          )
-        )}
-
-        {tab === 'thin' && (
-          thin.length ? (
-            <>
-              <p className="small muted" style={{ marginTop: 0 }}>
-                Real programmes found on their organiser&rsquo;s own site, but the
-                pages we read state no entry conditions — so there was nothing to
-                judge against the profile. Worth opening the source page, or
-                re-running with a greater reach.
-              </p>
-              {thin.map((o) => (
-                <Opportunity key={`${o.source_url}-${o.base_title}`} o={o} />
-              ))}
-            </>
-          ) : (
-            <p className="muted tight">
-              Every opportunity this run found had entry conditions to judge.
+              {running ? 'Nothing found yet.' : 'This run saved no opportunities.'}
             </p>
           )
         )}

@@ -9,10 +9,14 @@ from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
 
 from .client import OPPORTUNITIES
-from .identity import opportunity_identity
+from .identity import normalize, opportunity_identity
 from .programs import record_edition
 
 REQUIRED_FIELDS = ("title", "organizing_body", "base_title", "cycle_year", "source_url")
+
+#: Normalised form of the placeholder stored when a page never names an
+#: organiser. Kept out of the identity key so it cannot split a programme.
+_UNKNOWN_BODY_KEY = "not stated"
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,35 @@ async def save_opportunity(db: AsyncDatabase, record: dict) -> SaveResult:
     payload = {k: v for k, v in record.items() if k not in identity}
 
     before = await db[OPPORTUNITIES].find_one(identity, {"_id": 1})
+    if before is None:
+        # The same programme read once with an organiser and once without is one
+        # programme. Without this, "not stated" mints its own identity and the
+        # two are stored side by side — seen on the A' Design award, once with
+        # five conditions and a deadline, once with neither.
+        known = normalize(record["organizing_body"]) != _UNKNOWN_BODY_KEY
+        lookup = {
+            "norm_base_title": identity["norm_base_title"],
+            "cycle_year": identity["cycle_year"],
+        }
+        # A named record adopts the placeholder. An unnamed one joins whatever
+        # record already exists for this programme, whoever it names.
+        if known:
+            lookup["norm_organizing_body"] = _UNKNOWN_BODY_KEY
+        twin = await db[OPPORTUNITIES].find_one(
+            lookup, {"_id": 1, "norm_organizing_body": 1}
+        )
+        if twin is not None:
+            if known:
+                await db[OPPORTUNITIES].update_one(
+                    {"_id": twin["_id"]}, {"$set": identity}
+                )
+            else:
+                identity = {
+                    **lookup,
+                    "norm_organizing_body": twin["norm_organizing_body"],
+                }
+                payload.pop("organizing_body", None)
+            before = {"_id": twin["_id"]}
     document = await db[OPPORTUNITIES].find_one_and_update(
         identity,
         {"$set": payload, "$setOnInsert": identity},

@@ -28,6 +28,7 @@ export default function Opportunity({ o }) {
       <div className="row small muted" style={{ marginBottom: 6 }}>
         <span>{o.organizing_body}</span>
         <span className={`pill ${kind.cls}`}>{kind.label}</span>
+        {o.record_state === 'needs_deeper_read' && <span className="tag warn">Needs more evidence</span>}
         <span className="pill muted">cycle {o.cycle_year}</span>
         <span className={`pill ${o.submission_deadline ? 'met' : 'muted'}`}>
           {o.submission_deadline || 'no deadline found'}
@@ -39,6 +40,9 @@ export default function Opportunity({ o }) {
       <a className="src mono" href={o.source_url} target="_blank" rel="noreferrer">
         {o.source_url}
       </a>
+
+      {o.summary && <p className="tight">{o.summary}</p>}
+      {o.domain && <p className="small muted tight">Field: {o.domain}</p>}
 
       {o.deadline_note && (
         <div className="why-block">

@@ -4,9 +4,8 @@ The Discovery and Eligibility Agents reason against this document, so it is read
 from disk at run time and passed into prompts whole. It is never copied into a
 prompt string by hand, and nothing in the pipeline writes back to it.
 
-The profile is prose on purpose — it states where facts are uncertain and how to
-treat that uncertainty — so this loader deliberately does not parse it into
-fields. Callers get the text.
+Callers get the text. Two sections with fixed headings are also read verbatim,
+so discovery can put the hard constraints at the top of its prompts.
 """
 
 from __future__ import annotations
@@ -21,11 +20,47 @@ from .paths import BUSINESS_PROFILE, REPO_ROOT
 # has been circulated under. Both resolve, so neither breaks the loader.
 #: BusinessProfile.md is the profile. One name, so there is no ambiguity about
 #: which file defines the business.
-_CANDIDATE_NAMES = ("BusinessProfile.md",)
+_CANDIDATE_NAMES = ("BusinessProfile.v2.md",)
+
+SEARCH_CONSTRAINTS = "Search constraints"
+SEARCH_ANGLES = "Search angles"
 
 
 class ProfileNotFound(FileNotFoundError):
     """The business profile is missing, empty, or not where we looked."""
+
+
+class ProfileSectionMissing(RuntimeError):
+    """A section the pipeline reads by name is missing or empty."""
+
+
+def profile_section(text: str, heading: str) -> str:
+    """Body of one `## heading` section, verbatim."""
+    lines = text.splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if line.strip() == f"## {heading}"), None
+    )
+    if start is None:
+        raise ProfileSectionMissing(f"business profile has no '## {heading}' section")
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+        len(lines),
+    )
+    body = "\n".join(lines[start + 1:end]).strip()
+    if not body:
+        raise ProfileSectionMissing(f"business profile section '## {heading}' is empty")
+    return body
+
+
+def without_sections(text: str, *headings: str) -> str:
+    """The profile with the named `## ` sections removed."""
+    kept, skipping = [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            skipping = line[3:].strip() in headings
+        if not skipping:
+            kept.append(line)
+    return "\n".join(kept)
 
 
 @dataclass(frozen=True)

@@ -37,6 +37,11 @@ class OpportunityRecord(BaseModel):
     base_title: str = Field(min_length=1)
     cycle_year: int
     category: Category
+    #: The field the programme is about, in the page's own words. Empty when
+    #: the page does not say.
+    domain: str = ""
+    #: What the programme is, from the pages.
+    summary: str = ""
     eligibility_criteria: list[str] = Field(default_factory=list)
     submission_deadline: str | None = None
     deadline_note: str | None = None

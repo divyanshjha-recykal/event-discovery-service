@@ -43,8 +43,9 @@ async def run_discovery(
     run_id: str | None = None,
     limits: TraversalLimits | None = None,
     focus: str = "any",
+    search_provider: str = "",
 ) -> DiscoveryRun:
-    """Run Plan -> Research -> Analyze -> Finalize without free-form tool control."""
+    """Run plan -> search -> rank -> fetch -> extract -> evaluate -> store."""
     budget = budget or RunBudget()
     limits = limits or TraversalLimits()
     run_id = run_id or uuid4().hex
@@ -58,6 +59,7 @@ async def run_discovery(
         limits=limits,
         profile_text=load_business_profile().text,
         focus=focus,
+        search_provider=search_provider,
     )
 
     try:
@@ -72,7 +74,8 @@ async def run_discovery(
                 "max_pages_per_seed": limits.max_pages_per_seed,
                 "max_depth": limits.max_depth,
                 "focus": focus,
-                "workflow": "plan-research-analyze-finalize",
+                "search_provider": search_provider or "default",
+                "workflow": "plan-search-rank-fetch-extract-evaluate-store",
             },
             queries,
         )
@@ -87,6 +90,9 @@ async def run_discovery(
         "search_hits": [],
         "evidence_bundles": [],
         "candidates": [],
+        "picks": [],
+        "records": [],
+        "verdicts": [],
         "analyzed_seeds": [],
         "analysis_errors": [],
         "rejected": [],
@@ -110,8 +116,9 @@ async def run_discovery(
                 initial,
                 config={
                     "callbacks": [trace_handler()],
-                    # One optional re-plan means at most seven node executions.
-                    "recursion_limit": 10,
+                    # Seven steps, plus a second pass through five of them if
+                    # the first found nothing. Fan-out adds two more layers.
+                    "recursion_limit": 25,
                     # Names the saved progress for this run, so it can resume.
                     "configurable": {"thread_id": run_id},
                 },
@@ -126,7 +133,7 @@ async def run_discovery(
         except Exception as exc:  # noqa: BLE001
             runtime.failures.append(f"workflow: {type(exc).__name__}: {exc}")
             result = {**initial, "summary": f"RUN ENDED EARLY: {type(exc).__name__}: {exc}"}
-            status = "failed"
+            status = "stopped" if budget.cancelled else "failed"
         trace_url = client.get_trace_url(trace_id=client.get_current_trace_id())
     client.flush()
 
@@ -178,7 +185,7 @@ async def run_discovery(
                 "max_depth": limits.max_depth,
                 "focus": focus,
                 "stop_reason": budget.stop_reason,
-                "workflow": "plan-research-analyze-finalize",
+                "workflow": "plan-search-rank-fetch-extract-evaluate-store",
             },
             counts,
             thinking,

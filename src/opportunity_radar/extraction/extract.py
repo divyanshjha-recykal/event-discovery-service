@@ -195,6 +195,19 @@ def _as_date_string(value) -> str | None:
     return None
 
 
+# A page that says "March 2027" is giving us a real, usable fact. Rejecting it
+# discarded a whole record on one run. This is date parsing, not a relevance
+# heuristic: either the string is a bare year or year-month, or it is not.
+_PARTIAL_DATE = re.compile(r"^(\d{4})(-\d{2})?$")
+
+
+def _demote_partial_date(label: str, value: str | None) -> tuple[str | None, str | None]:
+    """Move a year or year-month out of the date field and into a note."""
+    if not value or not _PARTIAL_DATE.match(value.strip()):
+        return value, None
+    return None, f"{label} stated as {value.strip()}, no day given"
+
+
 def _as_criteria(value) -> list[str]:
     """Eligibility criteria as a list of separate condition strings."""
     if value is None:
@@ -406,6 +419,13 @@ def _build_record(
     # a list. Anything that is not a plain string is not a date we can ground, so
     # it becomes None and the record is stored unverified rather than crashing.
     deadline = _as_date_string(payload.get("submission_deadline"))
+    event_date = _as_date_string(payload.get("event_date"))
+    deadline, deadline_partial = _demote_partial_date("deadline", deadline)
+    event_date, event_partial = _demote_partial_date("event date", event_date)
+    note = _as_text(payload.get("deadline_note")) or ""
+    note = "; ".join(
+        part for part in (note, deadline_partial, event_partial) if part
+    )
     grounding = verify_deadline(deadline, scraped_text)
 
     try:
@@ -415,10 +435,12 @@ def _build_record(
             base_title=base,
             cycle_year=payload.get("cycle_year"),
             category=payload.get("category"),
+            domain=_as_text(payload.get("domain")),
+            summary=_as_text(payload.get("summary")),
             submission_deadline=deadline,
-            deadline_note=_as_text(payload.get("deadline_note")) or None,
+            deadline_note=note or None,
             deadline_verified=grounding.verified,
-            event_date=_as_date_string(payload.get("event_date")),
+            event_date=event_date,
             source_url=source_url,
             confidence_note=_as_text(payload.get("confidence_note")) or None,
         )
@@ -444,17 +466,6 @@ def build_record(
     second model to re-read a page the first model already read.
     """
     return _build_record(fields, evidence_text, source_url, page_title)
-
-
-def body_is_grounded(organizing_body: str, scraped_text: str) -> bool:
-    """True if any significant word of the organising body appears in the page."""
-    if not (organizing_body or "").strip():
-        return False
-    words = [w for w in normalize(organizing_body).split() if len(w) > 3]
-    if not words:
-        return False
-    haystack = normalize(scraped_text)
-    return any(word in haystack for word in words)
 
 
 def record_warnings(record: OpportunityRecord, today: date | None = None) -> list[str]:

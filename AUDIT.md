@@ -8,15 +8,152 @@
 |---|---|---|
 | 1 | Merge rules on the state (C4) | **Done** — 21 Sep |
 | 2 | Saved progress (C5) | **Done** — 21 Sep, now stored in Mongo |
-| 3 | Split the two big functions (C3) | planned — see below |
-| 4 | Fix the contradictions in the focus lines (A1, A2) | not started |
-| 5 | Pass focus to link-following (A4, A5) | not started |
+| 3 | Split the two big functions (C3) | **Done** — 21 Sep, 7 steps |
+| 4 | Fix the contradictions in the focus lines (A1, A2) | **Done** — 22 Sep |
+| 5 | Focus reaches link-following (A4) and analyze (A5) | **A5 done** — A4 **deferred** |
 | 6 | Cut to Awards only (A3) | not started |
-| 7 | Quotes for every extracted field (B1) | not started |
-| 8 | Require a date; fix what "ready" means (B2, B3) | not started |
-| 9 | Ask each question once and pass the answer on (C1, C2) | not started |
+| 7 | Quotes for every extracted field (B1) | **Partly** — 3 fields, measured |
+| 8 | Require a date (B2); fix what "ready" means (B3) | **B3 done** — B2 **dropped**, see below |
+| 9 | Ask each question once (C1); carry the answer on (C2) | **C2 done** — C1 not started |
 | 10 | Pool check after ranking (C6) | not started |
-| 11 | Delete dead code and stories (E1, E2) | not started |
+| 11 | Delete dead code and stories (E1, E2) | **E1 done**; E2 done for rank + extract, open for plan + link chooser |
+| 12 | Resource contention exposed by the split | **Done** — 22 Sep |
+| 13 | Let the organiser be "not stated" | **Done** — 22 Sep |
+| 14 | Schemas valid under strict mode, so any provider runs | **Done** — 22 Sep |
+| 15 | No fallbacks in planning; a failed step stops the run | **Done** — 22 Sep |
+| 16 | Deterministic date signals into ranking | **Done** — 23 Sep |
+| 17 | Firecrawl paced per minute, never parallel | **Done** — 23 Sep |
+| 18 | Unknown organiser no longer splits a programme | **Done** — 23 Sep |
+| 19 | Partial dates kept as a note instead of failing the record | **Done** — 23 Sep |
+| 20 | Eligibility given room for its answer | **Done** — 23 Sep |
+| 21 | Budget caps read from one place | **Done** — 23 Sep |
+| 22 | Sites picked against the scrape budget, not tool calls | **Done** — 23 Sep |
+| 23 | Drop duplicate pages: before ranking, and after the seed scrape | **Done** — 23 Sep |
+| 24 | Reuse pages already fetched in an earlier run | not started |
+| 25 | Test whether the search API can replace some scraping | not started |
+| 26 | Remove the last two fallbacks (ranking, saved progress) | not started |
+| 27 | A repeatable way to measure a change (D1) | not started |
+| 28 | Profile v2: fixed sections; constraints and angles read into prompts | **Done** — 23 Sep |
+| 29 | Restore ranking's entrant gate; planner re-asks a short query count | **Done** — 23 Sep |
+
+### 14 to 22 — what changed, 22-23 September
+
+**Strict schemas.** Every property is now marked required in the JSON schema we
+send. Pydantic leaves defaulted fields out, which OpenAI rejects outright — so
+GPT-4o-mini could not run at all and looked like a failing model when the
+request was invalid. It now runs, and is the fastest of the four tested.
+
+**No planning fallback.** A plan built in code from parsed profile fields fired
+on a live run and searched on product names, which the planner's own rules
+forbid, while hiding the real failure — a 180s timeout. The fallback is deleted,
+planning raises, and the planning calls moved to the 300s ceiling.
+
+**Date signals.** `published_date` is requested (free) and parsed from RFC 2822
+rather than sliced, and years are read from the title and address. Both are
+given to the ranker as facts. Coverage measured on a real pool: publish date on
+25% of results, a year on 42%, at least one on 51%.
+
+**Firecrawl pacing.** A semaphore capped concurrency, which does nothing to a
+per-minute limit: one-at-a-time still fires ~20/min. Scrapes now hold a lock for
+the whole request and wait out a 7s interval, giving 8.6/min against a ~10/min
+cap.
+
+**Identity.** Storing "not stated" inside the identity key made an unknown
+organiser a different programme from the same award with a known one — the
+A' Design award was stored twice, once with five conditions and a deadline and
+once with neither. A named record now adopts the placeholder; an unnamed one
+joins the record that exists.
+
+**Eligibility budget.** 4,096 tokens with no reasoning reserve meant the richest
+record was the one that failed: twelve conditions need the most output. Now
+12,000 with 40% reserved, matching every discovery call.
+
+**Seat sizing.** Ranking sized its picks on remaining tool calls rather than
+remaining scrapes, so a re-plan picked five sites with no scrape budget left and
+every one came back with zero pages. It now sizes on scrapes.
+
+### 23 to 27 — found while documenting, not yet done
+
+**Duplicate pages reach ranking.** The same page on two hosts —
+`ecopreneur.timesofindia.com` and `timesofindia.indiatimes.com` — entered the
+pool as two results with byte-identical content, ranked first and second, and
+were both fetched. Six scrapes of a fifteen-scrape budget on one page. Dropping
+a result whose content exactly matches one already held, before ranking, costs
+nothing and frees a slot.
+
+**A third of scraping is re-reading.** Across eight runs, 84 fetches covered 58
+unique URLs: 26 credits spent re-reading pages already read, one of them a terms
+and conditions page fetched four times. Good programmes rank well every run, so
+they are fetched every run. A page cache keyed on canonical URL with a TTL would
+cut it.
+
+**The search API may already carry the content.** `include_raw_content` is free
+and returns the cleaned full page; we pay Firecrawl separately for the same
+text. Measured on real pages, the page opening holds the dates that the
+query-matched extract misses — ICEF states 20-21 Aug 2026 at character 230 while
+its extract contains no date at all. Unknown: how stale Tavily's index is,
+whether consent banners survive its cleaning, and that it returns no link graph,
+which link-following needs. One search settles it.
+
+**Two fallbacks remain.** Ranking falls back to search-engine order, and saved
+progress falls back to memory when Mongo is unreachable. Both keep a run alive
+on a worse path, which is the pattern already removed from planning.
+
+### B2 is dropped, not deferred
+
+B2 proposed refusing a record with no date. The code already handles this
+correctly and the comment in `actionability.py` names the case:
+
+> a keyword regex here was a third and worse opinion: "Nominate Now" and
+> "Express Interest" failed it, so Greentech, CII and the ET Sustainability
+> Awards were each discarded.
+
+A missing date is a gap in what we read, not evidence the programme is shut, so
+it is stored and surfaced as "no date found — verify on the source page".
+Proven live on 21 Sep: India Technology Awards had no deadline, was stored, and
+was judged at score 1.0. **Implementing B2 would re-break exactly the case it
+was meant to protect.** Removed from the list.
+
+### A4 is deferred until after depth-3 testing
+
+A4 proposed telling the link chooser what the run is looking for. The 21 Sep run
+shows the chooser is not the failing part — its own reasons were "Brochure
+contains full entry details; Eligibility states who can enter" and, on a page
+offering one link, "only link is a winners announcement, which should be
+skipped". It picked correctly and declined correctly.
+
+What lost the conditions was depth: `max_pages_per_seed = 2` meant the seed page
+plus exactly **one** followed link, so on CII the chooser picked the brochure
+*and* the eligibility page and only one was ever fetched. Depth is now 3.
+Revisit A4 only if depth-3 runs show the wrong pages being chosen.
+
+### 12 — what the parallel fan-out exposed, 22 September
+
+Splitting `fetch` into one instance per site changed *when* resources are spent,
+not how many. Three things broke on the first live run:
+
+| Problem | Cause | Fix |
+|---|---|---|
+| 4 scrapes lost to `Rate Limit Exceeded` | 8 sites fetching at once burst past Firecrawl's per-minute cap | scrapes queue through one lane |
+| 3 sites scraped then never read | all 8 link-picks ran before any analysis, exhausting the 16-call model cap | `rank` now sizes its picks against the model-call budget too, and the caps were raised to fit 8 sites |
+| `select_links` returned nothing | `reasoning: {effort: "low"}` is advisory; nothing was reserved for the answer | an explicit `reasoning.max_tokens` reserve, same as every other call |
+
+The third was not caused by the split — `TOKENS_PICK_LINKS` and `light=True` are
+unchanged since the "working pipeline" commit. It became *visible* because
+failures are now attributed per-site instead of blending into one research step.
+
+### 13 — the organiser may now be "not stated", 22 September
+
+`organizing_body` was required with `min_length=1`, so a page that never says who
+runs the programme forced the model to invent one. The Aegis Graham Bell record
+was stored with `organizing_body: "mUni Campus"` — the page says only "POWERED BY
+MUNI CAMPUS" and names no organiser at all. A grounding check would have *passed*
+it, because that phrase really is on the page.
+
+The field is now optional. Blank is stored as "not stated" with a warning, and the
+prompt says the quote must be the sentence saying who runs it, never a sponsor,
+partner, platform or "powered by" name. The identity key is unchanged until we see
+how often this happens.
 
 ### 1 and 2 — what changed, 21 September
 
@@ -45,12 +182,72 @@ steps 3 and 9 possible — until now two steps could not write the same field, s
 every "do this for each site" had to be a loop inside one step. That is the
 actual reason `research_node` is 202 lines.
 
-**Left open:** saved progress survives a crash inside the running server, not a
-restart of the server. Durable progress needs the
-`langgraph-checkpoint-mongodb` package, which we have not installed. Nothing
-yet *uses* the saved progress to resume — that is a small separate piece.
+**Left open:** nothing yet *reads* the saved progress to resume a dead run —
+the progress is written, but restarting a run still starts it from the top.
+That is a small separate piece.
 
-### 3 — splitting the big steps: what we have and what replaces it
+### 3 — the split, as built on 21 September
+
+Seven steps, each with one job. `fetch` and `extract` run **once per site**,
+started together, rather than as a loop inside one step.
+
+```
+plan → search → rank ─┬─(one per site)→ fetch → extract ─→ evaluate ─┬→ store → end
+                      │                                              │
+                      └── pool too thin ────→ plan ←─ nothing found ──┘
+```
+
+| Step | Job | Reaches out to |
+|---|---|---|
+| `plan` | write the search queries | the model |
+| `search` | run the queries not yet run, in two waves | `tool_tavily_search` |
+| `rank` | order the whole pool best-first, choose sites **and say why** | the model, Mongo |
+| `fetch` | get the pages for **one** site | `tool_firecrawl_fetch`, the model |
+| `extract` | read **one** site, build and check its records | the model |
+| `evaluate` | judge each record against the profile, condition by condition | the model |
+| `store` | write each record once, with its verdict | Mongo |
+
+**What actually changed, beyond the names:**
+
+- **The reason a site was chosen now reaches the step that reads it.** `rank`
+  worked out why each site was worth fetching, and the old code ended with the
+  line `_ = reason` — computed and thrown away. It is now carried to `extract`
+  and put in front of the model as something to confirm or contradict.
+- **Judging happens before storing.** A record is written once, already
+  carrying its verdict. It used to be saved first and judged after, which is
+  why a run could report success before anything had been judged.
+- **A failure names the step that broke.** One dead site fails its own `fetch`
+  and the other sites carry on; before, they shared a step with everything else.
+- **One place decides whether to search again.** `evaluate` is the only point
+  where all sites have come back together, so the re-plan decision lives there.
+  Per-site counting would have counted four empty sites as four re-plans.
+- **Every write to Mongo is in `store`.** Past editions used to be written from
+  the middle of the old finalize step; they are now handed to `store` with the
+  rejection that produced them.
+
+**The grounding check, as agreed: a measurement, never a gate.** The model
+returns the sentence it read a value from, and the code checks that its own
+quote appears on the page. This is not word matching — that is what the deleted
+`body_is_grounded` did, and it would pass "PRCA" against "practical" and fail
+"Times Internet" against "TOI". Three fields carry a quote: who runs it, the
+deadline, and whether it is open. The result is stored on the record and shown
+as a warning. Nothing is rejected on it.
+
+`ready` no longer depends on grounding either — it now means only what it says:
+the page stated entry conditions.
+
+**Checked by:** a dry run end to end. Seven steps ran in order, the site fanned
+out to its own fetch and extract, one record was built, judged and stored, and
+all three quotes were found on the page. The check also caught a real
+inconsistency first time out — the fixture claimed a status sentence that was
+not on its own page, which is exactly the failure this is meant to see.
+
+**Left open:** `extract` still does three things in sequence — read the site,
+validate each record, measure grounding. Only the first is a judgement; the
+other two are plain checks over what it just produced, so they stay with it
+rather than becoming steps of their own.
+
+### 3 (original plan) — what we had and what replaces it
 
 **A note on "tools".** No step has a list of tools the model may choose from.
 Every outside call is written into the step itself. The model never decides to

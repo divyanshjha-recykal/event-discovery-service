@@ -6,7 +6,7 @@ Facts below are stated directly. Where a field is genuinely unknown, it's marked
 
 ## About Retearn
 
-Retearn Technologies Private Limited builds AI-powered reverse vending machines (RVMs) and Deposit Return System (DRS) infrastructure. Product line: **Reklaim PRO, ACE, Mini, Neo, FastScan**. Devices identify and sort PET, HDPE, LDPE, MLP, glass, and metal cans using edge AI, running fully offline on NVIDIA Jetson hardware, and pay users an instant UPI refund on deposit. Deployed across India, Bhutan, Mauritius, and the UK. Operates within the Recykal group.
+Retearn Technologies Private Limited builds AI-powered reverse vending machines (RVMs) and Deposit Return System (DRS) infrastructure. Product line: **Reklaim PRO, ACE, Mini, Neo, FastScan**. Devices identify and sort PET, HDPE, LDPE, MLP, glass, and metal cans using edge AI, running fully offline on NVIDIA Jetson hardware, and pay users an instant UPI refund on deposit. Deployed across India and Bhutan. Operates within the Recykal group.
 
 ## Identity
 
@@ -27,8 +27,7 @@ Retearn Technologies Private Limited builds AI-powered reverse vending machines 
 - FY 2025–26 ARR attributable to Reklaim: **₹4.76 crore** (i.e. effectively all revenue)
 - Revenue from AI products: **99%** of total
 - R&D / AI innovation spend: **80%** of FY 2025–26 revenue
-- Funding stage: **Bootstrapped**
-- MSME/Udyam registration, DPIIT recognition: **Not disclosed**
+- MSME/Udyam registration, DPIIT recognition
 
 Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+ informal workers onboarded, a 5-member on-ground team at Kedarnath) refer to livelihoods enabled through deployments, not Retearn's own payroll. Don't conflate the two on a headcount criterion.
 
@@ -58,9 +57,7 @@ Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+
 ## International operations
 
 - **Bhutan**: national-scale deployment. Gelephu Mindfulness City — 26 lakh+ bottles collected. Phuentsholing — 1.25 lakh+ bottles collected. Population participation exceeding **75%**. Refunds integrated with the Bank of Bhutan.
-- **Mauritius**: listed as a primary market served. No deployment-level figures disclosed.
-- **UK**: listed as a primary market served. No deployment-level figures disclosed.
-- Primary markets, as stated internally: India (Goa, Uttarakhand, Tamil Nadu, Himachal Pradesh, and other states), Bhutan, Mauritius, UK
+- Primary markets, as stated internally: India (Goa, Uttarakhand, Tamil Nadu, Himachal Pradesh, and other states) and Bhutan
 
 ## Technology
 
@@ -116,7 +113,7 @@ Job creation and workforce figures elsewhere in this profile (110+ jobs, 12,000+
 
 ## Standard descriptions
 
-- One-sentence description: "Retearn builds AI-powered reverse vending machines and Deposit Return System infrastructure, deployed across India, Bhutan, Mauritius, and the UK, running fully offline on edge AI hardware to identify, sort, and refund recyclable materials in real time."
+- One-sentence description: "Retearn builds AI-powered reverse vending machines and Deposit Return System infrastructure, deployed across India and Bhutan, running fully offline on edge AI hardware to identify, sort, and refund recyclable materials in real time."
 
 ---
 

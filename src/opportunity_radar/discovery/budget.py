@@ -19,11 +19,13 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-DEFAULT_TOOL_CALLS = 40
-DEFAULT_MAX_SEARCHES = 12
-DEFAULT_MAX_SCRAPES = 14
-DEFAULT_MAX_LLM_CALLS = 16
-DEFAULT_WALL_CLOCK_SECONDS = 900
+# Six sites at three pages each, with room for a second plan and search round.
+DEFAULT_TOOL_CALLS = 70
+DEFAULT_MAX_SEARCHES = 8
+DEFAULT_MAX_SCRAPES = 20
+DEFAULT_MAX_LLM_CALLS = 30
+# Scrapes are paced for Firecrawl's per-minute cap, so waiting is by design.
+DEFAULT_WALL_CLOCK_SECONDS = 1_500
 
 
 class BudgetExhausted(RuntimeError):

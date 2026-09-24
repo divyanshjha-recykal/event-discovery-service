@@ -16,11 +16,18 @@ function useExpandAll(epoch, apply) {
 }
 
 const NODE = {
-  plan: ['Plan', 'Turns the business profile into a search plan.'],
-  research: ['Research', 'Searches, chooses which sites to read, and fetches their pages.'],
-  analyze: ['Analyze', 'Reads each site and produces the structured listing — what the opportunity is, its dates, and its entry conditions.'],
-  finalize: ['Finalize', 'Checks each listing is still live, judges it against the business profile, and stores it.'],
+  plan: ['Plan', 'Writes search queries from the business profile.'],
+  search: ['Search', 'Runs each query and keeps one copy of each page.'],
+  rank: ['Rank', 'Orders the search results and chooses which sites to read.'],
+  fetch: ['Fetch', 'Reads each chosen site, following a few links on it.'],
+  extract: ['Extract', 'Names the opportunities on each site and builds a record for each one pursued.'],
+  evaluate: ['Evaluate', 'Judges each record against the business profile, condition by condition.'],
+  store: ['Store', 'Saves the records.'],
 }
+
+// Shown inside the step they belong to, not as steps of their own.
+const DROP = new Set(['dedupe', 'expired'])
+const RECORD = new Set(['extract', 'actionability', 'grounding'])
 
 const STEP_NAME = {
   plan: 'Plan',
@@ -31,8 +38,11 @@ const STEP_NAME = {
   memory: 'Memory',
   analyze: 'Analyze',
   extract: 'Build record',
+  grounding: 'Check quotes',
+  dedupe: 'Drop duplicate',
+  expired: 'Drop closed',
   actionability: 'Check if live',
-  feasibility: 'Check against profile',
+  feasibility: 'Judge conditions',
   save_opportunity: 'Store',
 }
 
@@ -73,10 +83,11 @@ function PlanBody({ e }) {
   )
 }
 
-function SearchBody({ e }) {
+function SearchBody({ e, followed = [] }) {
   const rows = e.results || []
   return (
     <>
+      {e.rationale && <p className="why small tight">{e.rationale}</p>}
       {e.detail && <p className="err small tight">{e.detail}</p>}
       {!rows.length && <p className="muted small tight">No results.</p>}
       {!!rows.length && (
@@ -93,13 +104,24 @@ function SearchBody({ e }) {
           </tbody>
         </table>
       )}
+      {!!followed.length && (
+        <div className="nested">
+          <div className="nested-label">{plural(followed.length, 'result dropped', 'results dropped')}</div>
+          {followed.map((d) => (
+            <div className="nested-item small" key={d.seq}>
+              {d.title} <Url href={d.url}>{(d.url || '').replace(/^https?:\/\//, '').slice(0, 60)}</Url>
+              <span className="muted"> — {headline(d)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </>
   )
 }
 
 function ChooseSitesBody({ e }) {
   if (e.outcome !== 'ok') {
-    return <p className="err small tight">{e.detail || 'Selection failed; fell back to search order.'}</p>
+    return <p className="err small tight">{e.detail || 'Ranking failed; the run stopped.'}</p>
   }
   const ranked = e.picked || []
   if (!ranked.length) {
@@ -164,7 +186,11 @@ function PageBody({ e, followed }) {
         </div>
       </div>
       {e.page_title && <div className="pagetitle">{e.page_title}</div>}
-      {e.detail && <p className="err small tight">{e.detail}</p>}
+      {e.detail && (
+        <p className="err small tight">
+          {e.source === 'firecrawl' ? 'Firecrawl error: ' : ''}{e.detail}
+        </p>
+      )}
       {e.preview && (
         <details className="raw">
           <summary className="small muted">
@@ -189,41 +215,161 @@ function PageBody({ e, followed }) {
   )
 }
 
-function AnalyzeBody({ e }) {
-  const cands = e.candidates || []
-  if (!cands.length) {
-    return <p className="muted small tight">No opportunities identified on this site.</p>
+const dash = (v) => (v === null || v === undefined || v === '' || v === 0 ? 'not stated' : v)
+
+function List({ title, items }) {
+  if (!items?.length) return null
+  return (
+    <table className="grid tightgrid">
+      <thead><tr><th>{title} ({items.length})</th></tr></thead>
+      <tbody>{items.map((x, j) => <tr key={j}><td>{x}</td></tr>)}</tbody>
+    </table>
+  )
+}
+
+function RecordLine({ r }) {
+  if (r.tool === 'extract') {
+    if (r.outcome !== 'ok') return <p className="err small tight">Record not built: {r.reason} {r.detail}</p>
+    return <p className="small tight"><span className="tag ok">Record built</span></p>
+  }
+  if (r.tool === 'actionability') {
+    return <p className="warn-line small tight">Set aside ({outcomeOf(r.outcome).label}): {r.reason}</p>
   }
   return (
-    <>
-      {cands.map((c, i) => (
-        <div className="cand" key={i}>
-          <div className="kv">
-            <div>
-              <strong>{c.title}</strong>
-              <Url href={c.url} />
-            </div>
-            <div className="tags">
-              <span className={`tag ${c.decision === 'pursue' ? 'ok' : 'muted'}`}>
-                {c.decision === 'pursue' ? 'Pursue' : 'Not relevant'}
-              </span>
-              {c.category && <span className="tag muted">{c.category}</span>}
-            </div>
-          </div>
-          <p className="why tight">{c.reason}</p>
-          {!!(c.entry_eligibility || []).length && (
-            <table className="grid tightgrid">
-              <thead><tr><th>Entry conditions found on the page</th></tr></thead>
-              <tbody>
-                {c.entry_eligibility.map((x, j) => <tr key={j}><td>{x}</td></tr>)}
-              </tbody>
-            </table>
-          )}
+    <p className="small muted tight">
+      Quotes checked on the page: {headline(r)}
+      {(r.fields || []).filter((f) => !f.found).map((f) => ` · ${f.field} quote not found`).join('')}
+    </p>
+  )
+}
+
+function Candidate({ c, records }) {
+  const research = c.category === 'research'
+  const deadline = c.submission_deadline
+    ? `${c.submission_deadline}${c.deadline_note ? ` (${c.deadline_note})` : ''}`
+    : c.deadline_note || 'not stated'
+  const facts = [
+    ['Organiser', dash(c.organizing_body)],
+    ['Field', dash(c.domain)],
+    ['Edition', dash(c.cycle_year)],
+    ['Entry deadline', deadline],
+    ['Event date', dash(c.event_date)],
+    ['Status on the page', dash(c.status)],
+  ]
+  const quotes = Object.entries(c.quotes || {}).filter(([, q]) => q)
+  return (
+    <div className="cand">
+      <div className="kv">
+        <div>
+          <strong>{c.title}</strong>
+          <Url href={c.url} />
         </div>
+        <div className="tags">
+          <span className={`tag ${c.decision === 'pursue' ? 'ok' : 'muted'}`}>
+            {c.decision === 'pursue' ? 'Pursue' : 'Set aside'}
+          </span>
+          {c.category && <span className="tag muted">{c.category}</span>}
+        </div>
+      </div>
+      {c.summary && <p className="tight">{c.summary}</p>}
+      <table className="grid tightgrid">
+        <tbody>
+          {facts.map(([k, v]) => (
+            <tr key={k}>
+              <td className="muted" style={{ width: 150 }}>{k}</td>
+              <td className={v === 'not stated' ? 'muted' : undefined}>{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="why-block">
+        <span className="why-label">{c.decision === 'pursue' ? 'Why pursue' : 'Why set aside'}</span>
+        <div>{c.reason}</div>
+      </div>
+      {records.map((r) => <RecordLine key={r.seq} r={r} />)}
+      <List title={research ? 'Scope it asks for' : 'Eligibility conditions'} items={c.entry_eligibility} />
+      {!research && !(c.entry_eligibility || []).length && (
+        <p className="warn-line small">The pages state no eligibility conditions.</p>
+      )}
+      <List title="Judged on" items={c.judging_criteria} />
+      <List title="What to submit" items={c.application_requirements} />
+      {c.confidence_note && (
+        <div className="why-block">
+          <span className="why-label">Extractor&rsquo;s own uncertainty</span>
+          <div>{c.confidence_note}</div>
+        </div>
+      )}
+      {!!quotes.length && (
+        <details className="raw">
+          <summary className="small muted">Sentences the values were read from</summary>
+          {quotes.map(([k, q]) => <p className="small tight" key={k}><strong>{k}:</strong> &ldquo;{q}&rdquo;</p>)}
+        </details>
+      )}
+    </div>
+  )
+}
+
+function AnalyzeBody({ e, followed = [] }) {
+  const cands = e.candidates || []
+  return (
+    <>
+      <Url href={e.url} />
+      {e.picked_because && <p className="small muted tight">Chosen because: {e.picked_because}</p>}
+      {!cands.length && <p className="muted small tight">No opportunities identified on this site.</p>}
+      {cands.map((c, i) => (
+        <Candidate key={i} c={c} records={followed.filter((r) => r.url === c.url)} />
       ))}
       {(e.errors || []).map((x, i) => (
         <p className="err small" key={i}>{x.seed_url}: {x.detail}</p>
       ))}
+    </>
+  )
+}
+
+function SkipBody({ e, all = [] }) {
+  const firecrawl = e.source ? e.source === 'firecrawl' : !e.chars
+  const fetchError = all.find(
+    (x) => x.tool === 'scrape' && x.node === 'fetch' && x.url === e.url && x.outcome !== 'ok',
+  )
+  return (
+    <>
+      <Url href={e.url} />
+      <div className="why-block">
+        <span className="why-label">{firecrawl ? 'Firecrawl could not load the page' : 'Our pipeline refused the page'}</span>
+        <div>{e.detail}</div>
+      </div>
+      {fetchError?.detail && <pre className="mono small scraped">{fetchError.detail}</pre>}
+    </>
+  )
+}
+
+function EvaluateBody({ e }) {
+  if (e.outcome !== 'ok') return <p className="err small tight">{e.detail}</p>
+  const rows = [
+    ...(e.criteria_results || []).map((r) => ({ criterion: r.criterion, verdict: r.status, reason: r.reasoning })),
+    ...(e.qualitative_notes || []).map((n) => ({ criterion: n.criterion, verdict: 'qualitative', reason: n.note })),
+  ]
+  return (
+    <>
+      <Url href={e.url} />
+      {!rows.length && <p className="muted small tight">No conditions recorded for this run.</p>}
+      {!!rows.length && (
+        <table className="grid">
+          <thead>
+            <tr><th style={{ width: '40%' }}>Condition</th><th style={{ width: 118 }}>Against our profile</th><th>Reason</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td>{r.criterion}</td>
+                <td><span className={`tag ${VERDICT[r.verdict]?.cls || 'muted'}`}>{VERDICT[r.verdict]?.label || r.verdict}</span></td>
+                <td className="why">{r.reason}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {e.confidence && <p className="small muted tight">Confidence: {e.confidence}</p>}
     </>
   )
 }
@@ -292,6 +438,7 @@ const BODY = {
   scrape: PageBody,
   analyze: AnalyzeBody,
   extract: ExtractBody,
+  feasibility: EvaluateBody,
 }
 
 /* ------------------------------------------------------------------ step */
@@ -299,10 +446,10 @@ const BODY = {
 function headline(e) {
   switch (e.tool) {
     case 'plan':
-      return e.outcome === 'fallback'
-        ? 'fallback plan used'
-        : plural((e.queries || []).length, 'query', 'queries')
-    case 'search': return e.query
+      if (e.outcome === 'failed') return 'planning failed'
+      if (e.outcome === 'short') return `${(e.queries || []).length} of ${e.asked} queries`
+      return plural((e.queries || []).length, 'query', 'queries')
+    case 'search': return `${e.query} · ${plural((e.results || []).length, 'result', 'results')}`
     case 'shortlist': {
       if (e.outcome !== 'ok') return 'selection failed'
       const ranked = e.picked || []
@@ -313,38 +460,55 @@ function headline(e) {
       const taken = ranked.filter((p) => p.fetched !== false).length
       return `${taken} to fetch of ${ranked.length} ranked, from ${e.considered}`
     }
-    case 'scrape': return (e.url || '').replace(/^https?:\/\//, '')
+    case 'scrape':
+      if (e.node === 'extract') return `${(e.url || '').replace(/^https?:\/\//, '')} — not read, the fetch failed`
+      return (e.url || '').replace(/^https?:\/\//, '')
     case 'analyze': {
       const c = e.candidates || []
       const p = c.filter((x) => x.decision === 'pursue').length
-      return c.length ? `${p} to pursue, ${c.length - p} set aside` : 'nothing found'
+      const site = (e.url || '').replace(/^https?:\/\//, '').slice(0, 50)
+      return `${site} — ${c.length ? `${p} to pursue, ${c.length - p} set aside` : 'nothing found'}`
     }
     case 'extract':
       return e.outcome === 'ok' ? e.record?.title : e.reason
+    case 'expired': return `closed: deadline ${e.entry_deadline || '-'}, event ${e.event_date || '-'}`
+    case 'dedupe': return `same page as ${(e.duplicate_of || '').replace(/^https?:\/\//, '')}`
+    case 'grounding': {
+      const f = e.fields || []
+      const found = f.filter((x) => x.found).length
+      return f.length ? `${found} of ${f.length} quoted from the page` : 'nothing to check'
+    }
     case 'memory': return e.detail
+    case 'feasibility': {
+      if (e.outcome !== 'ok') return `${e.title || ''} — evaluation failed`
+      const n = e.counts || {}
+      return `${e.title || ''} — ${n.met ?? 0} met, ${n.not_met ?? 0} not met, ${(n.unclear ?? 0) + (e.qualitative ?? 0)} need review`
+    }
     default: return e.title || (e.url || '').replace(/^https?:\/\//, '')
   }
 }
 
-function Step({ e, followed, expandAll, expandEpoch }) {
+function Step({ e, followed, all, expandAll, expandEpoch }) {
   const [override, setOverride] = useState(null)
   useExpandAll(expandEpoch, () => setOverride(null))
   const open = override ?? expandAll
   const Icon = TOOL_ICON[e.tool] || IconDot
-  const Body = BODY[e.tool] || SimpleBody
+  const Body = e.tool === 'scrape' && e.node === 'extract' ? SkipBody : BODY[e.tool] || SimpleBody
   return (
     <div className={`step tone-${toneOf(e)} s-${e.tool}`}>
       <button className="step-head" type="button" onClick={() => setOverride(!open)}>
         <span className="chev"><IconChevron open={open} /></span>
         <span className="step-icon"><Icon /></span>
-        <span className="step-tool">{STEP_NAME[e.tool] || e.tool}</span>
+        <span className="step-tool">
+          {e.tool === 'scrape' && e.node === 'extract' ? 'Skip site' : STEP_NAME[e.tool] || e.tool}
+        </span>
         <span className="step-summary">{headline(e)}</span>
         <span className="spacer" />
         <span className="step-time mono">t+{e.t}s</span>
       </button>
       {open && (
         <div className="step-body">
-          <Body e={e} followed={followed} />
+          <Body e={e} followed={followed} all={all} />
           <Raw e={e} />
         </div>
       )}
@@ -354,7 +518,7 @@ function Step({ e, followed, expandAll, expandEpoch }) {
 
 /* ------------------------------------------------------------ final output */
 
-function FinalOutput({ run, saved, live }) {
+function FinalOutput({ saved, totals, live }) {
   if (live) {
     return (
       <section className="pass final pending">
@@ -366,15 +530,14 @@ function FinalOutput({ run, saved, live }) {
       </section>
     )
   }
-  const c = run.counts || {}
   return (
     <section className="pass final">
       <div className="pass-head static">
         <span className="pass-name">Result</span>
         <span className="spacer" />
         <span className="small muted mono">
-          {c.saved ?? 0} ready · {c.needs_deeper ?? 0} need a deeper read ·{' '}
-          {c.rejected ?? 0} set aside
+          {totals.ready} ready · {totals.needs_deeper} need more evidence ·{' '}
+          {totals.set_aside} set aside
         </span>
       </div>
       <div className="pass-body">
@@ -403,7 +566,7 @@ function FinalOutput({ run, saved, live }) {
                 </div>
                 <div className="tags">
                   {o.record_state === 'needs_deeper_read'
-                    ? <span className="tag warn">Needs deeper read</span>
+                    ? <span className="tag warn">Needs more evidence</span>
                     : <span className="tag ok">Ready</span>}
                   {o.submission_deadline
                     ? <span className="tag ok">closes {o.submission_deadline}</span>
@@ -461,18 +624,35 @@ function groupByNode(events) {
   return passes
 }
 
-/** Followed pages hang off the seed that reached them, not as their own steps. */
+/** Child events hang off the step they belong to, not as steps of their own. */
 function nestPages(events) {
   const followedBy = new Map()
   const hidden = new Set()
-  events.forEach((e) => {
-    if (e.tool === 'scrape' && (e.depth ?? 0) > 0) hidden.add(e.seq)
-  })
+  const attach = (parent, child) => {
+    if (!followedBy.has(parent)) followedBy.set(parent, [])
+    followedBy.get(parent).push(child)
+    hidden.add(child.seq)
+  }
+  // Followed pages: under the seed page that reached them.
   let currentSeed = null
   events.forEach((e) => {
-    if (e.tool !== 'scrape') return
-    if ((e.depth ?? 0) === 0) { currentSeed = e.seq; followedBy.set(currentSeed, []) }
-    else if (currentSeed != null) followedBy.get(currentSeed).push(e)
+    if (e.tool !== 'scrape' || e.node === 'extract') return
+    if ((e.depth ?? 0) === 0) currentSeed = e.seq
+    else if (currentSeed != null) attach(currentSeed, e)
+  })
+  // Dropped results: recorded just before the search they came from.
+  let pending = []
+  events.forEach((e) => {
+    if (DROP.has(e.tool)) pending.push(e)
+    else if (e.tool === 'search') { pending.forEach((d) => attach(e.seq, d)); pending = [] }
+  })
+  // Record steps: under the site whose candidate they belong to.
+  events.forEach((e) => {
+    if (!RECORD.has(e.tool)) return
+    const site = [...events].reverse().find(
+      (a) => a.tool === 'analyze' && a.seq < e.seq && (a.candidates || []).some((c) => c.url === e.url),
+    )
+    if (site) attach(site.seq, e)
   })
   return {
     // "Follow links" is folded into the page card it belongs to.
@@ -481,14 +661,13 @@ function nestPages(events) {
   }
 }
 
-function StagePass({ pass, expandAll, expandEpoch, live, isLast }) {
+function StagePass({ pass, all, expandAll, expandEpoch, live, isLast }) {
   const [open, setOpen] = useState(isLast)
   useExpandAll(expandEpoch, () => setOpen(expandAll))
   const [title, purpose] = NODE[pass.node] || [pass.node, '']
   const { visible, followedBy } = useMemo(() => nestPages(pass.events), [pass.events])
   const problems = pass.events.filter((e) => toneOf(e) === 'bad').length
-  const end = pass.nextStart ?? pass.events[pass.events.length - 1].t
-  const span = Math.max(0, end - pass.events[0].t)
+  const span = Math.max(0, pass.events[pass.events.length - 1].t - (pass.prevEnd ?? 0))
 
   return (
     <section className={`pass${problems ? ' has-problems' : ''}${live && isLast ? ' active' : ''}`}>
@@ -506,7 +685,7 @@ function StagePass({ pass, expandAll, expandEpoch, live, isLast }) {
           <p className="pass-purpose small muted">{purpose}</p>
           <div className="steps">
             {visible.map((e) => (
-              <Step key={e.seq} e={e} followed={followedBy.get(e.seq) || []}
+              <Step key={e.seq} e={e} followed={followedBy.get(e.seq) || []} all={all}
                     expandAll={expandAll} expandEpoch={expandEpoch} />
             ))}
             {live && isLast && (
@@ -522,7 +701,7 @@ function StagePass({ pass, expandAll, expandEpoch, live, isLast }) {
   )
 }
 
-export default function Journey({ run, events = [], saved = [], live = false }) {
+export default function Journey({ run, events = [], saved = [], totals, live = false }) {
   const [expand, setExpand] = useState({ on: false, epoch: 0 })
   const [failuresOnly, setFailuresOnly] = useState(false)
 
@@ -530,7 +709,8 @@ export default function Journey({ run, events = [], saved = [], live = false }) 
     const all = groupByNode(events)
     all.forEach((p, i) => {
       p.ordinal = i
-      p.nextStart = all[i + 1]?.events[0]?.t
+      const prev = all[i - 1]?.events
+      p.prevEnd = prev ? prev[prev.length - 1].t : 0
     })
     if (!failuresOnly) return all
     return all
@@ -558,13 +738,13 @@ export default function Journey({ run, events = [], saved = [], live = false }) 
       </div>
 
       {passes.map((pass, i) => (
-        <StagePass key={`${pass.node}-${pass.ordinal}`} pass={pass}
+        <StagePass key={`${pass.node}-${pass.ordinal}`} pass={pass} all={events}
                    expandAll={expand.on} expandEpoch={expand.epoch}
                    live={live} isLast={i === passes.length - 1} />
       ))}
       {!passes.length && <p className="muted tight">No problem steps in this run.</p>}
 
-      <FinalOutput run={run} saved={saved} live={live} />
+      <FinalOutput saved={saved} totals={totals} live={live} />
 
       {run.trace_url && (
         <p className="small" style={{ marginTop: 12 }}>

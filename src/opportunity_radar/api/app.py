@@ -27,6 +27,13 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..config import MongoConfig
 from ..discovery import RunBudget, TraversalLimits, run_discovery
+from ..discovery.budget import (
+    DEFAULT_MAX_LLM_CALLS,
+    DEFAULT_MAX_SCRAPES,
+    DEFAULT_MAX_SEARCHES,
+    DEFAULT_TOOL_CALLS,
+    DEFAULT_WALL_CLOCK_SECONDS,
+)
 from ..eligibility import evaluate_criteria, load_criteria_sets
 from ..paths import REPO_ROOT
 from ..profile import load_business_profile
@@ -159,6 +166,14 @@ def _read_journey(journey: list[dict]) -> dict[str, list[dict]]:
         # Skips are decided by `analyze` and carried on its candidate list, not
         # as rows of their own.
         if tool == "analyze":
+            reached_extraction.add(url)
+            if not event.get("candidates"):
+                set_aside.append({
+                    "url": url,
+                    "title": None,
+                    "outcome": "not relevant",
+                    "reason": "no opportunity identified on this site",
+                })
             for candidate in event.get("candidates") or []:
                 if candidate.get("decision") == "skip" and candidate.get("url"):
                     set_aside.append({
@@ -174,7 +189,9 @@ def _read_journey(journey: list[dict]) -> dict[str, list[dict]]:
         if tool == "save_opportunity" and outcome == "ok":
             saved.append(url)
         elif tool == "scrape" and outcome == "ok":
-            scraped[url] = event
+            # Followed pages are evidence for their site, not candidates.
+            if not event.get("depth"):
+                scraped[url] = event
             unreachable.pop(url, None)
         elif tool == "scrape":
             # A page that would not load is a gap in the evidence, not a
@@ -189,6 +206,21 @@ def _read_journey(journey: list[dict]) -> dict[str, list[dict]]:
                     "reason": event.get("reason") or "extraction failed",
                     "detail": event.get("detail"),
                 })
+        elif tool == "expired":
+            set_aside.append({
+                "url": url,
+                "title": event.get("title"),
+                "outcome": "already closed",
+                "reason": "dates verified on the page have passed: deadline "
+                          f"{event.get('entry_deadline') or '-'}, event {event.get('event_date') or '-'}",
+            })
+        elif tool == "dedupe":
+            set_aside.append({
+                "url": url,
+                "title": event.get("title"),
+                "outcome": "duplicate",
+                "reason": f"same page as {event.get('duplicate_of')}",
+            })
         elif tool in ("skip", "actionability"):
             set_aside.append({
                 "url": url,
@@ -227,6 +259,8 @@ def _read_journey(journey: list[dict]) -> dict[str, list[dict]]:
                 ),
             })
 
+    unique = {(row["url"], row["title"]): row for row in reversed(set_aside)}
+    set_aside = [row for row in set_aside if unique[(row["url"], row["title"])] is row]
     return {"saved": saved, "set_aside": set_aside, "failures": failures}
 
 
@@ -338,6 +372,9 @@ async def stop_run(run_id: str) -> dict:
     return {"run_id": run_id, "status": "stopping"}
 
 
+_LIMITS = TraversalLimits()
+
+
 class RunConfig(BaseModel):
     """Everything the configurator sets. Each cap maps to a `RunBudget` field.
 
@@ -346,22 +383,31 @@ class RunConfig(BaseModel):
     however high the headline budget was set.
     """
 
+    # Defaults come from RunBudget, never copies of it. Held separately, the
+    # API kept a frontend run on the old caps after they were raised here.
     model: str | None = None
-    budget: int = Field(default=40, ge=1, le=200)
-    max_searches: int = Field(default=12, ge=1, le=60)
-    max_scrapes: int = Field(default=14, ge=1, le=60)
-    max_llm_calls: int = Field(default=16, ge=1, le=60)
-    wall_clock_seconds: int = Field(default=900, ge=30, le=3600)
+    budget: int = Field(default=DEFAULT_TOOL_CALLS, ge=1, le=200)
+    max_searches: int = Field(default=DEFAULT_MAX_SEARCHES, ge=1, le=60)
+    max_scrapes: int = Field(default=DEFAULT_MAX_SCRAPES, ge=1, le=60)
+    max_llm_calls: int = Field(default=DEFAULT_MAX_LLM_CALLS, ge=1, le=60)
+    wall_clock_seconds: int = Field(
+        default=DEFAULT_WALL_CLOCK_SECONDS, ge=30, le=3600
+    )
     # How far research reaches. `max_depth` was inert until the traversal bug
     # was fixed: link choice never ran below the seed whatever it was set to.
-    max_candidates: int = Field(default=8, ge=1, le=12)
-    max_links_per_page: int = Field(default=2, ge=0, le=6)
-    max_pages_per_seed: int = Field(default=2, ge=1, le=10)
-    max_depth: int = Field(default=1, ge=0, le=3)
+    max_candidates: int = Field(default=_LIMITS.max_candidates, ge=1, le=12)
+    max_links_per_page: int = Field(
+        default=_LIMITS.max_links_per_page, ge=0, le=6
+    )
+    max_pages_per_seed: int = Field(
+        default=_LIMITS.max_pages_per_seed, ge=1, le=10
+    )
+    max_depth: int = Field(default=_LIMITS.max_depth, ge=0, le=3)
     # What this run is looking for. Steers the planner and site selection;
     # nothing in code filters on it, so a focused run that meets a great
     # opportunity of another kind still keeps it.
     focus: Literal["any", "award", "event", "research"] = "any"
+    search_provider: Literal["exa", "tavily"] = "exa"
     queries: list[str] = Field(default_factory=list)
     dry_run: bool = False
 
@@ -417,6 +463,7 @@ async def run_pipeline(request: PipelineRequest, background: BackgroundTasks) ->
                 _db, queries=request.queries or None,
                 model=request.model, budget=budget, limits=limits,
                 dry_run=request.dry_run, run_id=run_id, focus=request.focus,
+                search_provider=request.search_provider,
             )
         except Exception as exc:  # noqa: BLE001
             await _db[RUNS].update_one(
@@ -481,6 +528,7 @@ async def start_discovery(request: RunRequest, background: BackgroundTasks) -> d
                 dry_run=request.dry_run,
                 run_id=run_id,
                 focus=request.focus,
+                search_provider=request.search_provider,
             )
         except Exception as exc:  # noqa: BLE001 — surfaced through the run record
             await _db[RUNS].update_one(

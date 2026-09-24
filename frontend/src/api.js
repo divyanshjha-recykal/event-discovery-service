@@ -48,9 +48,9 @@ export const outcome = (key) =>
 /** What a run is looking for. Steers the search; filters nothing. */
 export const FOCUS = [
   ['any', 'Everything', 'Awards, events and technical venues together.'],
-  ['award', 'Awards', 'Prizes, rankings and honours that name a winner.'],
+  ['award', 'Awards', 'Prizes, rankings and honours we could be entered for.'],
   ['event', 'Events', 'Conferences, summits, forums and expos.'],
-  ['research', 'Research', 'Calls for papers, workshops and industry tracks.'],
+  ['research', 'Research', 'Conference papers, workshops, demo tracks and challenges.'],
 ]
 
 /** What kind of opportunity a stored record is. */
@@ -75,41 +75,54 @@ export const VERDICT = {
 
 /* ----------------------------------------------------------------- stages */
 
-export const STAGES = ['plan', 'research', 'analyze', 'finalize']
+export const STAGES = [
+  'plan', 'search', 'rank', 'fetch', 'extract', 'evaluate', 'store',
+]
 
 export const STAGE_OF = {
   plan: 'plan',
-  search: 'research',
-  shortlist: 'research',
-  select_links: 'research',
-  scrape: 'research',
-  memory: 'research',
-  analyze: 'analyze',
-  extract: 'finalize',
-  save_opportunity: 'finalize',
-  feasibility: 'finalize',
-  actionability: 'finalize',
-  skip: 'finalize',
+  search: 'search',
+  shortlist: 'rank',
+  memory: 'rank',
+  select_links: 'fetch',
+  scrape: 'fetch',
+  analyze: 'extract',
+  extract: 'extract',
+  grounding: 'extract',
+  dedupe: 'search',
+  expired: 'search',
+  actionability: 'extract',
+  skip: 'extract',
+  feasibility: 'evaluate',
+  save_opportunity: 'store',
 }
 
 /* ----------------------------------------------------------------- config */
 
+/** Where searches go. Exa reads dates and entry conditions off each page. */
+export const SEARCH_PROVIDERS = [
+  ['exa', 'Exa', 'Reads deadlines and who can enter off each page, so closed programmes drop before any scrape.'],
+  ['tavily', 'Tavily', 'Query-matched extracts only; dates rarely come back.'],
+]
+
 export const DEFAULT_CONFIG = {
   model: '',
-  budget: 60,
-  max_searches: 15,
+  budget: 70,
+  max_searches: 8,
   max_scrapes: 20,
-  max_llm_calls: 22,
-  wall_clock_seconds: 900,
-  max_candidates: 8,
+  max_llm_calls: 30,
+  // Scrapes are paced for Firecrawl's per-minute cap, so waiting is by design.
+  wall_clock_seconds: 1500,
+  max_candidates: 6,
   max_links_per_page: 2,
-  max_pages_per_seed: 2,
+  max_pages_per_seed: 3,
   max_depth: 1,
   focus: 'any',
+  search_provider: 'exa',
   queries: '',
 }
 
-const CONFIG_KEY = 'or-config'
+const CONFIG_KEY = 'or-config-v2'
 
 export const loadConfig = () => {
   try {
@@ -136,6 +149,7 @@ export const toRequest = (config, dryRun) => ({
   max_pages_per_seed: Number(config.max_pages_per_seed),
   max_depth: Number(config.max_depth),
   focus: config.focus || 'any',
+  search_provider: config.search_provider || 'exa',
   queries: config.queries.split('\n').map((q) => q.trim()).filter(Boolean),
   dry_run: dryRun,
 })
