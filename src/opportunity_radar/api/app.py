@@ -37,6 +37,7 @@ from ..discovery.budget import (
 from ..eligibility import evaluate_criteria, load_criteria_sets
 from ..paths import REPO_ROOT
 from ..profile import load_business_profile
+from ..reporting import configured_recipients, send_report
 from ..storage import (
     EXTRACTION_FAILURES,
     OPPORTUNITIES,
@@ -355,6 +356,32 @@ async def get_run_results(run_id: str) -> dict:
             "set_aside": len(read["set_aside"]) + len(read["failures"]),
         },
     }
+
+
+@app.get("/api/mail")
+async def mail_settings() -> dict:
+    """Where a report would go. Recipients come from SMTP_TO only."""
+    return {"to": configured_recipients()}
+
+
+@app.post("/api/runs/{run_id}/email")
+async def email_run(run_id: str) -> dict:
+    """Mail one run's saved opportunities as a CSV to the SMTP_TO recipients."""
+    to = configured_recipients()
+    if not to:
+        raise HTTPException(status_code=400, detail="SMTP_TO is not set in .env")
+    rows = (await get_run_results(run_id))["saved"]
+    if not rows:
+        raise HTTPException(status_code=400, detail="this run saved no opportunities")
+    try:
+        await asyncio.to_thread(
+            send_report, to, rows, f"opportunity-radar-{run_id[:6]}.csv",
+        )
+    except Exception as exc:  # noqa: BLE001 — shown to the user as-is
+        raise HTTPException(
+            status_code=502, detail=f"{type(exc).__name__}: {exc}"[:500]
+        ) from exc
+    return {"sent_to": to, "count": len(rows)}
 
 
 # Budgets of runs currently in flight, so /stop can cancel one. A cancelled
