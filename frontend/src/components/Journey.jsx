@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { outcome as outcomeOf, VERDICT } from '../api.js'
 import { IconChevron, IconDot, IconExternal, TOOL_ICON } from '../icons.jsx'
+import Opportunity from './Opportunity.jsx'
 
 const BAD = new Set(['failed', 'insufficient'])
 const WARN = new Set(['fallback', 'no_new_evidence', 'partial'])
@@ -546,66 +547,7 @@ function FinalOutput({ saved, totals, live }) {
             Nothing ready to act on. Set aside shows what was considered and why.
           </p>
         )}
-        {saved.map((o) => {
-          const e = o.eligibility
-          const rows = [
-            ...(e?.criteria_results || []).map((r) => ({
-              criterion: r.criterion, verdict: r.status, reason: r.reasoning,
-            })),
-            ...(e?.qualitative_notes || []).map((n) => ({
-              criterion: n.criterion, verdict: 'qualitative', reason: n.note,
-            })),
-          ].sort((a, b) => (VERDICT[a.verdict]?.order ?? 3) - (VERDICT[b.verdict]?.order ?? 3))
-          return (
-            <div className="final-row" key={o.source_url}>
-              <div className="kv">
-                <div>
-                  <strong>{o.title}</strong>
-                  <div className="small muted">{o.organizing_body}</div>
-                  <Url href={o.source_url} />
-                </div>
-                <div className="tags">
-                  {o.record_state === 'needs_deeper_read'
-                    ? <span className="tag warn">Needs more evidence</span>
-                    : <span className="tag ok">Ready</span>}
-                  {o.submission_deadline
-                    ? <span className="tag ok">closes {o.submission_deadline}</span>
-                    : <span className="tag muted">no deadline published</span>}
-                  {o.event_date && <span className="tag muted">event {o.event_date}</span>}
-                </div>
-              </div>
-              {rows.length ? (
-                <table className="grid">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '40%' }}>Condition</th>
-                      <th style={{ width: 118 }}>Against our profile</th>
-                      <th>Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r, i) => (
-                      <tr key={i}>
-                        <td>{r.criterion}</td>
-                        <td>
-                          <span className={`tag ${VERDICT[r.verdict]?.cls || 'muted'}`}>
-                            {VERDICT[r.verdict]?.label || r.verdict}
-                          </span>
-                        </td>
-                        <td className="why">{r.reason}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p className="warn-line small">
-                  No entry conditions were found on the page, so this could not be
-                  judged against the profile.
-                </p>
-              )}
-            </div>
-          )
-        })}
+        {saved.map((o) => <Opportunity key={`${o.source_url}-${o.base_title}`} o={o} />)}
       </div>
     </section>
   )

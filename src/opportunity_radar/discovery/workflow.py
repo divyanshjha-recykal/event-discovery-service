@@ -79,11 +79,8 @@ from .state import (
 # killed the second planning wave on deepseek-v4.1-flash — 364 seconds of
 # reasoning against a 3,000-token ceiling, then an empty string.
 TOKENS_PICK_LINKS = 4_000      # 1k reserved for thinking, rest for <=4 ints + a sentence
-# <=10 ranked picks (int + 120-char title + 300-char reason) plus a 400-char
-# observation is roughly 1,300 tokens. The headroom is for reasoning tokens:
-# this call no longer runs at low effort, and under strict json_schema a reply
-# truncated mid-object is unparseable, which loses the whole ranking.
-TOKENS_SHORTLIST = 12_000
+# The answer is ~1,300 tokens; the rest is headroom because the reasoning cap is advisory.
+TOKENS_SHORTLIST = 24_000
 # Wave two reads 24 result lines plus the whole profile before writing, so it
 # reasons far more than wave one — which is why wave one survived 3,000 tokens
 # and wave two did not.
@@ -274,7 +271,7 @@ class _CandidateModel(BaseModel):
     body_quote: str = Field(default="", max_length=400)
     deadline_quote: str = Field(default="", max_length=400)
     status_quote: str = Field(default="", max_length=400)
-    deadline_note: str | None = Field(default=None, max_length=200)
+    deadline_note: str | None = Field(default=None, max_length=400)
     event_date: str | None = Field(default=None, max_length=32)
     confidence_note: str = Field(default="", max_length=600)
     supporting_urls: list[Annotated[str, Field(max_length=500)]] = Field(
@@ -836,6 +833,10 @@ def _date_line(hit, today: str) -> str:
     ]
     if hit.date_quote:
         parts.append(f'date read from: "{hit.date_quote[:200]}"')
+    if hit.key_dates:
+        parts.append(f"key dates: {hit.key_dates[:300]}")
+    if hit.entry_status:
+        parts.append(f'entry status: "{hit.entry_status[:200]}"')
     parts.append(
         f"published/updated {hit.published_date}"
         if hit.published_date else "publish date unknown"
@@ -1374,7 +1375,8 @@ its own right.
 List every stated condition an entrant must satisfy, each as its own item, in
 the words the page uses. If the page states no conditions, return an empty list
 — never a sentence saying there are none, and never the event's audience or
-attendee description. Do not summarise them into one line and do not invent
+attendee description. Form fields ("Registration Number*") and lists of who
+attends ("CXOs & founders") are not conditions. Do not summarise them into one line and do not invent
 conditions the page does not state. Keep judging criteria (what the entry is
 scored on) and application requirements (what must be submitted) in their own
 separate lists.
@@ -1404,8 +1406,10 @@ limits and anonymity rules are application requirements, not eligibility.
                     else removed.
   cycle_year        the year of THIS edition.
   status            "open", "closed" or "unclear".
-  submission_deadline, event_date   "YYYY-MM-DD" or null.
-  deadline_note     set when the deadline is rolling or relative.
+  submission_deadline, event_date   "YYYY-MM-DD"; "YYYY-MM" when the page gives
+                    only a month; null when not stated.
+  deadline_note     a rolling or relative deadline, and the page's other key
+                    dates with their labels ("Online screening: October 2026").
   confidence_note   anything you were unsure about.
 
 Use only what the pages say; never infer a deadline that is not written there. A

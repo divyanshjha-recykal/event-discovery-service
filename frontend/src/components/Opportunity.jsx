@@ -1,26 +1,20 @@
 import { VERDICT, category } from '../api.js'
 
+const List = ({ items }) => <ul className="plain">{items.map((x, i) => <li key={i}>{x}</li>)}</ul>
+
 export default function Opportunity({ o }) {
   const e = o.eligibility
+  const kind = category(o.category)
+  const isResearch = o.category === 'research'
   const requirements = o.application_requirements || []
   const judging = o.judging_criteria || []
   const rows = [
-    ...(e?.criteria_results || []).map((r) => ({
-      criterion: r.criterion, verdict: r.status, reason: r.reasoning,
-    })),
-    ...(e?.qualitative_notes || []).map((n) => ({
-      criterion: n.criterion, verdict: 'qualitative', reason: n.note,
-    })),
+    ...(e?.criteria_results || []).map((r) => ({ criterion: r.criterion, verdict: r.status, reason: r.reasoning })),
+    ...(e?.qualitative_notes || []).map((n) => ({ criterion: n.criterion, verdict: 'qualitative', reason: n.note })),
   ].sort((a, b) => (VERDICT[a.verdict]?.order ?? 3) - (VERDICT[b.verdict]?.order ?? 3))
-  const judgeCount = rows.filter(
-    (r) => r.verdict === 'unclear' || r.verdict === 'qualitative',
-  ).length
-  const kind = category(o.category)
-  // A research venue states no conditions on who may enter — anyone may. What
-  // is judged instead is whether our work is in the scope it asks for, so the
-  // same field is labelled for what it actually holds.
-  const isResearch = o.category === 'research'
-  const conditionLabel = isResearch ? 'Scope it asks for' : 'Eligibility conditions'
+  const count = (v) => rows.filter((r) => r.verdict === v).length
+  const notes = [o.deadline_note, o.confidence_note].filter(Boolean)
+  const sources = [...new Set([o.source_url, ...(o.evidence_urls || [])])]
 
   return (
     <article className="opp">
@@ -28,161 +22,76 @@ export default function Opportunity({ o }) {
       <div className="row small muted" style={{ marginBottom: 6 }}>
         <span>{o.organizing_body}</span>
         <span className={`pill ${kind.cls}`}>{kind.label}</span>
-        {o.record_state === 'needs_deeper_read' && <span className="tag warn">Needs more evidence</span>}
-        <span className="pill muted">cycle {o.cycle_year}</span>
         <span className={`pill ${o.submission_deadline ? 'met' : 'muted'}`}>
-          {o.submission_deadline || 'no deadline found'}
-          {o.submission_deadline && (o.deadline_verified ? ' verified' : ' unverified')}
+          {o.submission_deadline ? `deadline ${o.submission_deadline}` : 'no deadline found'}
         </span>
         {o.event_date && <span className="pill muted">event {o.event_date}</span>}
+        {o.record_state === 'needs_deeper_read'
+          ? <span className="tag warn">Needs more evidence</span>
+          : <span className="tag ok">Ready</span>}
         {o.dry_run && <span className="pill unclear">fixture</span>}
       </div>
-      <a className="src mono" href={o.source_url} target="_blank" rel="noreferrer">
-        {o.source_url}
-      </a>
 
+      <div className="section-label">About</div>
       {o.summary && <p className="tight">{o.summary}</p>}
-      {o.domain && <p className="small muted tight">Field: {o.domain}</p>}
-
-      {o.deadline_note && (
-        <div className="why-block">
-          <span className="why-label">Deadline note</span>
-          <div>{o.deadline_note}</div>
-        </div>
-      )}
-
-      {o.confidence_note && (
-        <div className="why-block">
-          <span className="why-label">Extractor&rsquo;s own uncertainty</span>
-          <div>{o.confidence_note}</div>
-        </div>
-      )}
-
-      {!!requirements.length && (
-        <>
-          <div className="section-label">What you have to submit</div>
-          <ul className="plain">{requirements.map((r, i) => <li key={i}>{r}</li>)}</ul>
-        </>
-      )}
-
-      {!!judging.length && (
-        <>
-          <div className="section-label">What you are judged on</div>
-          <ul className="plain">{judging.map((r, i) => <li key={i}>{r}</li>)}</ul>
-        </>
-      )}
+      {o.why_pursued && <p className="small muted tight">Why it was pursued: {o.why_pursued}</p>}
 
       <div className="section-label">
-        {conditionLabel}
-        {rows.length > 0 && <span className="muted"> — {rows.length} judged</span>}
+        {isResearch ? 'Scope' : 'Eligibility'}
+        {!!rows.length && (
+          <span className="muted"> — {count('met')} met · {count('not_met')} not met · {count('unclear') + count('qualitative')} need review</span>
+        )}
       </div>
-
-      {!e && !!(o.eligibility_criteria || []).length && (
-        <>
-          <p className="muted small tight">Extracted but not yet evaluated.</p>
-          <ul className="plain">
-            {o.eligibility_criteria.map((c, i) => <li key={i}>{c}</li>)}
-          </ul>
-        </>
-      )}
-      {!e && !(o.eligibility_criteria || []).length && (
+      {rows.length ? (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th style={{ width: '42%' }}>{isResearch ? 'Topic' : 'Condition'}</th>
+              <th style={{ width: 104 }}>Verdict</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td>{r.criterion}</td>
+                <td><span className={`tag ${VERDICT[r.verdict]?.cls || 'muted'}`}>{VERDICT[r.verdict]?.label || r.verdict}</span></td>
+                <td className="why">{r.reason}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
         <p className="muted small tight">
-          {isResearch
-            ? 'No scope or topic list was found on this page, so it cannot be evaluated.'
-            : 'No eligibility conditions were extracted from this page, so it cannot be evaluated.'}
+          {(o.eligibility_criteria || []).length
+            ? 'Conditions found but not yet judged.'
+            : 'The pages read state no conditions.'}
         </p>
       )}
 
-      {e && (
+      {!!(requirements.length || judging.length) && (
         <>
-          <table className="grid">
-            <thead>
-              <tr>
-                <th style={{ width: '42%' }}>{isResearch ? 'Topic' : 'Condition'}</th>
-                <th style={{ width: 104 }}>Verdict</th>
-                <th>Reasoning</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  <td>{r.criterion}</td>
-                  <td>
-                    <span className={`tag ${VERDICT[r.verdict]?.cls || 'muted'}`}>
-                      {VERDICT[r.verdict]?.label || r.verdict}
-                    </span>
-                  </td>
-                  <td className="why">{r.reason}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="small muted" style={{ marginTop: 8 }}>
-            {e.criteria_results.filter((r) => r.status === 'met').length} met ·{' '}
-            {e.criteria_results.filter((r) => r.status === 'not_met').length} not met ·{' '}
-            {judgeCount} need review
-          </p>
-          {(e.classification_flags || []).map((f, i) => <div className="flag" key={i}>{f}</div>)}
+          <div className="section-label">How to apply</div>
+          {!!requirements.length && <List items={requirements} />}
+          {!!judging.length && (
+            <>
+              <p className="small muted tight" style={{ marginTop: 8 }}>Judged on</p>
+              <List items={judging} />
+            </>
+          )}
+        </>
+      )}
+
+      {!!notes.length && (
+        <>
+          <div className="section-label">Notes</div>
+          {notes.map((n, i) => <p className="small tight" key={i}>{n}</p>)}
         </>
       )}
 
       <details className="diag">
-        <summary className="small muted">Extraction and evaluation detail</summary>
-
-        {o.extraction_completeness && (
-          <>
-            <div className="section-label">
-              Extraction completeness — {Math.round((o.extraction_completeness.score || 0) * 100)}%
-            </div>
-            <div className="row">
-              {[
-                ['identity', o.extraction_completeness.identity],
-                ['open state', o.extraction_completeness.open_state],
-                ['deadline', o.extraction_completeness.deadline],
-                ['eligibility', o.extraction_completeness.eligibility],
-                ['source coverage', o.extraction_completeness.source_coverage],
-              ].map(([label, ok]) => (
-                <span key={label} className={`pill ${ok ? 'met' : 'not_met'}`}>{label}</span>
-              ))}
-            </div>
-          </>
-        )}
-
-        {e && (
-          <>
-            <div className="section-label">Evaluation</div>
-            <div className="row">
-              <span className={`pill ${e.confidence === 'high' ? 'met' : 'unclear'}`}>
-                confidence {e.confidence}
-              </span>
-              <span className="pill muted">
-                score {e.score == null ? 'not computable' : e.score.toFixed(2)}
-              </span>
-            </div>
-            <p className="small muted reason">
-              Confidence is high only when at least one condition was fact-checkable and
-              none came back unclear. Score is met ÷ (met + not met) and misleads on
-              programmes with alternative tracks, so read the per-condition verdicts above
-              rather than the number.
-            </p>
-          </>
-        )}
-
-        <div className="section-label">Evidence pages read ({(o.evidence_urls || []).length})</div>
-        {(o.evidence_urls || []).map((u, i) => (
-          <a key={i} className="u mono" href={u} target="_blank" rel="noreferrer">{u}</a>
-        ))}
-        {!(o.evidence_urls || []).length && (
-          <p className="small muted tight">Only the source page above.</p>
-        )}
-
-        <div className="section-label">Identity</div>
-        <p className="small muted tight">
-          <code>{o.organizing_body}</code> + <code>{o.base_title}</code> + {o.cycle_year}
-          {o.discovery_run_id && (
-            <> · last written by run <code>{o.discovery_run_id.slice(0, 6)}</code></>
-          )}
-        </p>
+        <summary className="small muted">Sources ({sources.length})</summary>
+        {sources.map((u) => <a key={u} className="u mono" href={u} target="_blank" rel="noreferrer">{u}</a>)}
       </details>
     </article>
   )

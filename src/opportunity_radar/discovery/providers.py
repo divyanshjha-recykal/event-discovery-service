@@ -165,6 +165,8 @@ _EXA_SUMMARY_QUERY = (
     "State what this page says about the award, competition, event or call for "
     "entries it describes. Use only what the page states."
 )
+# Passages about entering, not about the topic: the ranker judges who can enter and when.
+_EXA_HIGHLIGHTS_QUERY = "who can enter, eligibility, entry deadline, key dates, how to apply or exhibit"
 # Facts only. Judgements (open or closed, is this a programme page) stay with our ranker.
 _EXA_SUMMARY_SCHEMA = {
     "type": "object",
@@ -176,6 +178,8 @@ _EXA_SUMMARY_SCHEMA = {
         "who_can_enter": {"type": "string", "description": "Who may enter, in the page's words; empty if not stated."},
         "country_restriction": {"type": "string", "description": "Country or region entrants must be from; empty if none stated."},
         "date_quote": {"type": "string", "description": "The sentence stating the deadline or event date, copied verbatim; empty if none."},
+        "key_dates": {"type": "string", "description": "Every date the page gives, each with its label, e.g. 'Nominations close: 25 Sep 2026; Jury: November 2026'; empty if none."},
+        "entry_status": {"type": "string", "description": "The sentence saying whether entries are open, closed or opening soon, copied verbatim; empty if none."},
     },
 }
 
@@ -230,7 +234,7 @@ async def tool_exa_search(
         "numResults": max_results,
         "excludeDomains": list(EXCLUDED_DOMAINS),
         "contents": {
-            "highlights": True,
+            "highlights": {"query": _EXA_HIGHLIGHTS_QUERY, "maxCharacters": SEARCH_CONTENT_CHARS},
             "summary": {"query": _EXA_SUMMARY_QUERY, "schema": _EXA_SUMMARY_SCHEMA},
         },
     }
@@ -270,6 +274,8 @@ async def tool_exa_search(
                 who_can_enter=facts.get("who_can_enter", ""),
                 country_restriction=facts.get("country_restriction", ""),
                 date_quote=facts.get("date_quote", "") if deadline or event else "",
+                key_dates=facts.get("key_dates", ""),
+                entry_status=facts.get("entry_status", ""),
             )
         )
     return hits

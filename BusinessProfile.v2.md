@@ -28,7 +28,6 @@
 - Website: retearn.in
 - Group: operates within the Recykal group
 - Separation from Recykal: own legal entity and own financials, distinct from Recykal (Rapidue Technologies Pvt. Ltd.)
-- Named leadership: Not disclosed
 - Note: do not assume Recykal's leadership applies to Retearn
 - Registrations: MSME/Udyam registered; DPIIT recognised
 

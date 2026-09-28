@@ -35,6 +35,33 @@
 | 27 | A repeatable way to measure a change (D1) | not started |
 | 28 | Profile v2: fixed sections; constraints and angles read into prompts | **Done** — 23 Sep |
 | 29 | Restore ranking's entrant gate; planner re-asks a short query count | **Done** — 23 Sep |
+| 30 | Results and CSV show everything extracted (manager feedback) | not started — see below |
+| 31 | Results list only the run's own records; one programme stored under two titles | not started — see below |
+
+### 31 — records shown under the wrong run, and one programme under two titles (28 Sep)
+
+- **Display:** `/api/runs/{id}/results` finds records by source URL, so an older record at
+  the same URL shows under a newer run (22ff3a's "Circular Economy Awards" under 48d057).
+  Fix: match on URL and title from the run's `save_opportunity` events.
+- **Storage:** identity is organiser + base title + cycle year, so "Circular Economy Awards"
+  and "Global Circular Economy Awards" are two records. Same URL + organiser + year is not
+  a safe merge rule: raceexpos.com legitimately holds an expo and its speaker programme.
+
+### 30 — Results and CSV show everything extracted (manager feedback, 25 Sep)
+
+Extract captures far more than the Results card and CSV show. The Zarabi award's
+record notes the page contradicts itself on the closing date; the CSV drops it.
+
+- **Store three more fields:** extract's pursue reason, the ranker's reason, the page's status.
+- **Results card, ordered for the decision:** header with days to deadline; what it is;
+  why it's here; each condition with verdict and reason, then judgement calls; what to
+  submit and how it's judged; check before acting (uncertainty, gaps, unfound quotes,
+  flagged conditions); sources and the quoted sentences.
+- **One CSV, built on the server,** for both Download and Email. Opportunities sheet
+  gains summary, days left, deadline note, reasons, uncertainty, gaps, and conditions
+  with verdicts; a second Conditions sheet has one row per condition.
+- Today the dashboard CSV (`frontend/src/export.js`) and the emailed CSV
+  (`src/opportunity_radar/reporting.py`) are separate code and already differ.
 
 ### 14 to 22 — what changed, 22-23 September
 

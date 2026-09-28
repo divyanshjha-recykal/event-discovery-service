@@ -338,6 +338,16 @@ async def get_run_results(run_id: str) -> dict:
             seen_urls.add(doc["source_url"])
 
     saved.sort(key=lambda d: (ordered.index(d["source_url"]), d.get("title") or ""))
+    # Why extract pursued each record lives in the journey, so older runs show it too.
+    reasons = {
+        (c.get("url"), (c.get("title") or "").strip().casefold()): c.get("reason")
+        for e in run.get("journey") or [] if e.get("tool") == "analyze"
+        for c in e.get("candidates") or [] if c.get("decision") == "pursue"
+    }
+    for doc in saved:
+        doc["why_pursued"] = reasons.get(
+            (doc.get("source_url"), (doc.get("title") or "").strip().casefold())
+        )
 
     return {
         "run_id": run_id,

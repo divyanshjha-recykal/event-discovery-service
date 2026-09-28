@@ -47,6 +47,10 @@ class SearchHit:
     country_restriction: str = ""
     #: The sentence the provider read the date from.
     date_quote: str = ""
+    #: Every dated milestone on the page, with its label.
+    key_dates: str = ""
+    #: The page's own sentence on whether entry is open.
+    entry_status: str = ""
 
 
 @dataclass(frozen=True)
