@@ -1,6 +1,7 @@
 # What is wrong with this project, and what to do about it
 
-21 September 2026. Written against the running code.
+21 September 2026. Written against the running code. Updated 28 September 2026 at the end
+of Phase 1; the Phase 2 plan is below the progress table.
 
 ## Progress
 
@@ -11,7 +12,7 @@
 | 3 | Split the two big functions (C3) | **Done** — 21 Sep, 7 steps |
 | 4 | Fix the contradictions in the focus lines (A1, A2) | **Done** — 22 Sep |
 | 5 | Focus reaches link-following (A4) and analyze (A5) | **A5 done** — A4 **deferred** |
-| 6 | Cut to Awards only (A3) | not started |
+| 6 | Cut to Awards only (A3) | **Replaced** by Phase 2 W6 (a record shape per opportunity type) |
 | 7 | Quotes for every extracted field (B1) | **Partly** — 3 fields, measured |
 | 8 | Require a date (B2); fix what "ready" means (B3) | **B3 done** — B2 **dropped**, see below |
 | 9 | Ask each question once (C1); carry the answer on (C2) | **C2 done** — C1 not started |
@@ -29,14 +30,294 @@
 | 21 | Budget caps read from one place | **Done** — 23 Sep |
 | 22 | Sites picked against the scrape budget, not tool calls | **Done** — 23 Sep |
 | 23 | Drop duplicate pages: before ranking, and after the seed scrape | **Done** — 23 Sep |
-| 24 | Reuse pages already fetched in an earlier run | not started |
-| 25 | Test whether the search API can replace some scraping | not started |
-| 26 | Remove the last two fallbacks (ranking, saved progress) | not started |
-| 27 | A repeatable way to measure a change (D1) | not started |
+| 24 | Reuse pages already fetched in an earlier run | not started — Phase 2 W2 |
+| 25 | Test whether the search API can replace some scraping | **Superseded** — Exa returns facts per result (item 33); scraping still needed for conditions |
+| 26 | Remove the last two fallbacks (ranking, saved progress) | **Ranking done** — 23 Sep; saved-progress fallback to memory remains |
+| 27 | A repeatable way to measure a change (D1) | not started — Phase 2 W1 |
 | 28 | Profile v2: fixed sections; constraints and angles read into prompts | **Done** — 23 Sep |
 | 29 | Restore ranking's entrant gate; planner re-asks a short query count | **Done** — 23 Sep |
-| 30 | Results and CSV show everything extracted (manager feedback) | not started — see below |
-| 31 | Results list only the run's own records; one programme stored under two titles | not started — see below |
+| 30 | Results and CSV show everything extracted (manager feedback) | **Partly** — card done 28 Sep (item 43); one server-built CSV not started |
+| 31 | Results list only the run's own records; one programme stored under two titles | not started — Phase 2 W2 |
+| 32 | Ranking fails loudly; no fall back to search order | **Done** — 23 Sep |
+| 33 | Exa as the default search provider, chosen per run from the dashboard | **Done** — 23 Sep |
+| 34 | Model no longer echoes the site URL; code drops nothing on a string mismatch | **Done** — 24 Sep (3 pursued expos had been silently dropped) |
+| 35 | Word-matching title swap in ranking deleted | **Done** — 24 Sep |
+| 36 | Date gate at search deleted; dates go to the ranker as data with their source sentence | **Done** — 24 Sep |
+| 37 | Journey shows the pipeline's own hierarchy; full extracted listing and verdicts per step | **Done** — 24 Sep |
+| 38 | Fetch errors say whether Firecrawl or our pipeline refused the page | **Done** — 24 Sep |
+| 39 | `summary` field on every extracted opportunity | **Done** — 24 Sep |
+| 40 | Email the run CSV from the dashboard, to SMTP_TO only | **Done** — 25 Sep |
+| 41 | Extract: form fields and attendee lists are not conditions; month-only and key dates kept | **Done** — 28 Sep |
+| 42 | Exa summary returns key dates and the entry-status sentence; highlights aimed at entry details | **Done** — 28 Sep |
+| 43 | One standard opportunity card in Results and the Journey result | **Done** — 28 Sep |
+| 44 | Ranking output cap 12k → 24k (provider ignores the reasoning cap; run 75bead failed on it) | **Done** — 28 Sep |
+
+## End of Phase 1 — where things stand, 28 September
+
+Measured on runs 48d057, 5249ba and c6a554 (DeepSeek V4.1 Flash, Exa, caps 70/8/20/30, 6 sites).
+
+| Measure | Value |
+|---|---|
+| Model calls per run | 16–19 |
+| Tokens per run | ~75–90k in; ~7–9k answer; ~43–56k thinking |
+| Model cost per run | ~$0.045–0.050 |
+| Exa per run | 4–5 searches × $0.014 = ~$0.06–0.07 |
+| Scrapes per run | 4–14 of 20 |
+| Wall time | 5–15 min, most of it paced scraping and model thinking |
+| Opportunities saved per run | 1–6 |
+| Largest call against its output cap | extract 60%, plan wave 2 51%, evaluate 44%, rank 35% |
+
+**What limits results today**, in order of effect:
+
+1. **Link discovery is starved.** Firecrawl runs with main content only, which strips site
+   navigation — where "Key dates", "Nominate" and "Eligibility" links live. Seed pages yield
+   0–29 links and the link picker is usually offered 1–3. SABERA was offered one link, back to
+   itself, so its deadline page was never reached.
+2. **Ranking passes fewer sites than there are seats.** In 4 of the last 5 runs everything
+   that passed was fetched; order never mattered. It also passes weak pages (attendee and
+   speaker lists) as "enterable".
+3. **Budget goes unspent.** Runs use 4–5 of 8 searches; re-planning only happens when
+   nothing at all is found.
+4. **Extract's pursue decision is lenient.** Evaluation catches it (Zarabi: "early-stage only",
+   not met), but the record is still stored as ready.
+
+**Data already on hand for Phase 2**, reusable without new credits: 7 runs in Mongo with
+233 search results (165 unique URLs), 39 ranked picks, 47 unique pages with stored text,
+45 extracted candidates and 40 stored opportunities; plus `reference/pool-70386a.json`,
+`reference/exa-pool-652ec9.json` and `reference/candidates.csv`.
+
+## Phase 2 — plan
+
+### Feedback taken in
+
+From the Phase 1 review:
+
+| # | Feedback | Workstream |
+|---|---|---|
+| F1 | No caching: the same searches and pages are paid for again | W2 |
+| F2 | Cataloguing is convoluted; this is a cataloguing problem — know it once, store it structured, don't rediscover | W2 |
+| F3 | Sharpen domain-based search: get more from one search instead of many broad ones; explore component costs as a domain | W3 |
+| F4 | Test a dedicated re-ranker on a small batched eval against the current ranking | W4 |
+| F5 | Define the confidence scoring: how aligned an opportunity is with the organisation | W5 |
+| F6 | Stay on free tiers; testing must not exhaust them | Budget rules below |
+| F7 | No confidence at the decision points (search, selection, pursue/skip) | W5 |
+| F8 | Evaluation judges conditions without the source page | W5 |
+| F9 | Queries framed on product terms, not technology and demonstrated impact | W3 |
+| F10 | Uniform model across nodes | W8 |
+| F11 | No repeatable measurement of quality | W1 |
+| F12 | Default tool-call budget insufficient for a full cycle | W1, then re-size |
+| F13 | Hand-labelled set for scoring retrieval with a re-ranker | W1, W4 |
+| F14 | Classify by opportunity type; run per type | W6 |
+| F15 | Discovery window (e.g. next 6 months) | W7 |
+| F16 | No outbound notification | W7 |
+| F17 | Deeper and wider on paid tiers | Deferred until W1–W3 show where depth pays |
+| F18 | The programmes registry should drive the search | W2, W7 |
+| F19 | Scheduled autonomous runs | W7 |
+| F20 | Technical and research axis searched on the engineering | W3, W6 |
+| F21 | Search specificity: is an Awards or Events run enforced, and is it cheaper than Everything? | W3 (specificity) |
+| F22 | Search for cheaper or better components for the RVM product line | W9 |
+
+Two review points need correcting against the code, not just accepting:
+
+- **"No parallel execution."** Fetch and extract already run one lane per site in parallel.
+  Firecrawl scrapes are serialised on purpose, because the free tier caps requests per minute.
+- **"Tool-call budget insufficient."** Recent runs use 17–33 of 70. The binding limit is how
+  few sites ranking passes, not the cap. Re-size only after W1 can measure the effect.
+
+### Budget rules for Phase 2 (F6)
+
+Free tiers: Exa gives $10 of credit a month (~700 searches at our $0.014). Firecrawl free
+credits are limited — record the balance at the start of Phase 2. OpenRouter is paid, at
+cents per run.
+
+1. **Replay before live.** Every change to planning, ranking, extraction or evaluation is
+   first checked against stored data (W1). No live run to test a prompt.
+2. **One live run per milestone**, not per change. Each costs ~5 Exa searches and ~15 scrapes.
+3. **A spend ledger** (`reference/spend-ledger.md`): date, what was tested, searches, scrapes,
+   model cost, remaining balances. Updated after every live call.
+4. **Cache first (W2)** so that repeated tests read stored pages instead of re-scraping.
+5. **Credit-spending tests need an explicit yes**, as in Phase 1.
+
+### Workstreams
+
+**W1 — Measurement: labelled set and replay** (F11, F12, F13; item 27)
+
+- Label the 165 unique search results already stored: is it the programme's own page, can
+  Retearn enter, is it current, which opportunity type. A small labelling page or a CSV.
+- Label the 45 extracted candidates: correct pursue/skip, correct deadline, conditions real.
+- A replay harness that runs ranking, extract and evaluation on stored inputs and scores
+  against the labels: precision of the top sites fetched, passed-good vs passed-bad, correct
+  dates, condition verdicts matching a human's.
+- **Credits:** no search or scrape; about $0.01–0.05 of model per replay.
+- **Done when:** a change can be scored in minutes and compared to the Phase 1 baseline.
+
+**W2 — Cache and catalogue** (F1, F2, F18; items 24, 31)
+
+Three stores, each with one job:
+
+| Store | Key | Holds | Used for |
+|---|---|---|---|
+| Search cache | provider + query | results with Exa facts, fetched date | re-running a query within its TTL costs nothing |
+| Page cache | canonical URL | page text, links, content hash, fetched date, outcome | a page read in the last N days is not re-scraped; a changed hash marks the programme for re-check |
+| Catalogue | programme id | names and aliases, organiser, known URLs, type, editions with dates, last verified, next expected window, status | "already known" is shown to ranking; known programmes are refreshed, not rediscovered |
+
+- **Two kinds of run:** a *refresh* re-checks catalogued programmes whose window is near (no
+  search, one scrape each); a *discovery* searches only for what the catalogue does not know.
+- **Identity (item 31):** one programme under two titles is resolved in the catalogue. Same
+  site + same organiser + same year is not a safe rule (raceexpos.com holds two real
+  programmes), so a candidate match goes to a small model check or a merge in the dashboard.
+- **Seeding:** the 47 stored pages and 40 stored opportunities seed the page cache and
+  catalogue, so W2 starts with data and no credits.
+- **Model prompt caching:** put the stable part of each prompt (profile, rules) first so the
+  provider's prefix cache applies. Cached reads today are only a few thousand tokens a run.
+- **Done when:** a second run on the same queries spends no search or scrape credits on
+  anything already known, and the Results page shows one record per programme.
+
+**W3 — Search economy and domain sharpening** (F3, F9, F20)
+
+- **More per search:** Exa bills up to 10 results in the base price; we ask for 7. Ask for 10.
+  Richer summary fields are free per page (item 42 did this for dates).
+- **Listing pages become leads:** a directory page that names ten programmes is dropped today.
+  Extract the names into the catalogue as unverified leads for later refresh runs.
+- **Fix link discovery** (limit 1 above): take links from the full page while keeping the
+  main-content text. Needs a 2-scrape test of Firecrawl's behaviour first.
+- **Queries on technology and impact**, per opportunity type, taken from the profile's
+  Search angles; checked against the W1 labels, not by eye.
+- **Component costs:** a separate objective (procurement, not recognition). Scope it as its
+  own profile section and record type once W1–W2 exist, not inside the opportunity flow.
+- **Credits:** ~10–20 Exa searches and 2 scrapes of targeted tests.
+
+*Search specificity (F21).* Today the focus is one prompt line in plan, rank, link picking
+and extract. Nothing in code filters on it, and a focused run has the same path and caps as
+Everything. Two focused runs stayed on type (223e14 awards, 8b7309 research) and used fewer
+scrapes, but only because fewer results passed ranking. The change: **type becomes data
+that code enforces.**
+
+1. **Measure:** add type to the W1 labels; replay ranking per focus on stored pools. Metrics:
+   on-type share of fetched sites; searches + scrapes per on-type record saved. No credits.
+2. **Type on every result:** an `opportunity_type` field in Exa's summary (free, billed per
+   page) and on each ranked pick. When a type is chosen, code does not fetch off-type picks
+   (set aside, visible) and stores off-type records to the catalogue only, not the run's Results.
+3. **A playbook per type**, in one config block: what the type is called on the web, what to
+   pair it with (field and impact; technical subfield for research), what to avoid, and known
+   source domains via Exa's domain filter.
+4. **A budget per type** (start: awards 6 searches × 3 pages; events 4 × 2; research 4 × 2),
+   with 10 results per search and catalogue-first refresh.
+5. **Validate:** ~15 Exa searches (5 per type), on cached pages where possible.
+   **Done when:** ≥90% of fetched sites match the chosen type, and searches and scrapes per
+   on-type record fall below the Everything baseline.
+
+**W4 — Re-ranker feasibility** (F4, F13)
+
+- Compare on the W1 labelled pool, in small batches: (a) the current listwise model ranking,
+  (b) a dedicated re-ranker, (c) Exa's own order.
+- Candidate re-ranker within the approved model families: **Qwen3-Reranker** (open weights,
+  runs locally, so no credits).
+- Measure precision of the top 6, the good pages missed, cost and time per pool.
+- **Decision gate:** adopt only if it beats (a) on the labels. It may also serve as a cheap
+  first pass that trims the pool before the model ranks it.
+
+**W5 — Confidence and alignment, defined** (F5, F7, F8)
+
+Written as a specification before code, then checked on the W1 labels. Two separate things,
+never blended into one number:
+
+- **Fit** — how aligned the opportunity is with the organisation: hard conditions met / not
+  met / unknown, and whether the type is one the profile seeks.
+- **Certainty** — how sure we are of the facts: own page read, deadline found and quoted,
+  conditions found, date conflicts flagged.
+
+Outputs are tiers with reasons (e.g. Eligible / Likely / Needs review / Not eligible), not a
+decimal score. Every decision point records its own confidence and reason: rank per pick,
+extract per pursue/skip, evaluation per condition. Evaluation also receives the page passage
+each condition came from (F8), and code checks that every condition comes back exactly once.
+
+**W6 — Opportunity types and their record shapes** (F14, A3, F20)
+
+Types: award, event (exhibit), event (speak), research / call for papers, challenge. Each has
+its own definition of a complete record: an award needs conditions and a deadline; an expo
+needs dates, a way to take part and the cost; a call for papers needs scope and a submission
+deadline. Runs can target one type. This removes attendee lists being judged as conditions.
+
+**W7 — Time window, registry-driven runs, scheduling, notification** (F15, F16, F18, F19)
+
+- A rolling window per run (default 6 months): applied at ranking where dates are known and at
+  storing, where out-of-window records go to the catalogue only.
+- A weekly scheduled run: refresh what the catalogue says is due, then discovery with what
+  budget remains.
+- An email digest after each scheduled run: new, changed, closing within 14 days. Reuses the
+  existing mailer and SMTP_TO.
+
+**W8 — Model per call type and remaining clean-up** (F10; items 26, 30)
+
+- Choose a model per call from W1 scores: strongest where a wrong call wastes scrapes
+  (ranking), cheaper for bulk reading. Turn reasoning off where it adds nothing (link picking).
+- One server-built CSV for Download and Email (item 30); remove the memory fallback for saved
+  progress (item 26); delete `profile_seed.py`; rewrite `CLAUDE.md`; drop the digit/"must"
+  flag (E4).
+
+**W9 — Component sourcing for the RVM line** (F22)
+
+A second objective on the same pipeline: find cheaper or better components for the RVM
+product line. Procurement, not recognition, so it has its own brief, record and evaluation,
+and never mixes with opportunity runs.
+
+| Step | Opportunity runs | Component runs |
+|---|---|---|
+| Input | Business profile | **Component brief**, one per part: function, must-have specs, nice-to-have specs, current part and price, target (cheaper by X%, or better at Y) |
+| Plan | Queries from the profile | Queries from the function and specs, plus the current part number for drop-in alternatives |
+| Search | Exa | Exa to **discover** suppliers and alternatives; **distributor APIs** (e.g. Octopart/Nexar, DigiKey, Mouser) for price breaks, stock and lead time — terms and free tiers to be checked |
+| Rank | Programme page, enterable, current | Real product page, buyable in India, plausibly meets the must-have specs |
+| Extract | Conditions, deadline | Datasheet specs, price breaks, minimum order, lead time, certifications |
+| Evaluate | Conditions vs profile | **Specs vs the brief, same mechanism:** each must-have spec Met / Not met / Unclear; quality and reliability go to a person |
+| Compare | — | **Price difference computed in code** against the BOM baseline, never by the model |
+| Catalogue (W2) | Programmes and editions | Components → alternatives → last price, stock and date checked |
+
+**Rules:**
+- Price arithmetic happens in code from structured data. The model only judges spec fit.
+- BOM costs stay local; only specs go to the model provider, unless approved otherwise.
+- Prefer distributor APIs to scraping storefronts: structured, current, and within terms of use.
+
+**Choosing what to search:** rank BOM lines by annual spend (unit cost × quantity per machine
+× machines per year), then by risk (single source, long lead time, import dependence), then
+by swappability (no redesign or requalification needed). Pilot on **3–5 parts** that are
+high-spend and swappable. Refresh monthly through the catalogue. The baseline is cost per
+part and per machine, so every alternative reads as "saves ₹X per machine at the same spec".
+
+**Data to request from the inventory team** (start now; it takes time to collect):
+
+- Per RVM model (Reklaim PRO, ACE, Mini, Neo, FastScan), the BOM with, per line: component
+  name and subsystem; manufacturer and part number (MPN); current supplier(s), imported or
+  sourced in India; unit cost with currency, duty and freight, and the date of that price;
+  quantity per machine; machines built per year, actual and planned; minimum order quantity;
+  lead time; history of stock-outs, price rises or quality failures.
+- For the parts they most want improved: datasheet and the specs that matter (electrical,
+  interface, size, operating temperature, ingress rating); required certifications (BIS, CE,
+  RoHS…); swappable or locked by design, firmware or certification, and the requalification
+  effort; alternatives already tried and why rejected; the target (cheaper by how much, or
+  better at what).
+- Constraints: approved vendor list; preference for Indian or local suppliers; which data may
+  go to an external AI provider and which must stay internal.
+
+**Depends on:** W1 (labels and replay, extended to components), W2 (catalogue), W5 (fit and
+certainty, reused for spec matching). **Credits:** pilot of ~3–5 searches per part plus API
+calls on free tiers. **Done when:** for each pilot part, at least one alternative is found
+with every must-have spec Met, a computed price difference, and its datasheet as the source.
+
+### Order
+
+| Stage | Workstreams | Credits needed | Why this order |
+|---|---|---|---|
+| A — Foundations | W1, W2; W9 data request to inventory | None (stored data) | Everything after is measured by W1 and made cheaper by W2; the BOM takes time to collect |
+| B — Definitions | W5, W6, W7 window | None (replay) | Changes what counts as good, so it comes before tuning |
+| C — Retrieval | W3 including specificity, W4 | Small: ~35 searches, 2 scrapes | Tuned against labels, on cached pages |
+| C′ — Components | W9 pilot on 3–5 parts | Small: ~15–25 searches, API free tiers | Reuses W1, W2 and W5 once they exist |
+| D — Autonomy | W7 schedule + digest, W8 | One live run per milestone | Only worth scheduling once results are measured good |
+| Later | Paid tiers (F17) | Paid | Only where W1 shows depth is the limit |
+
+Milestone live runs: end of A (baseline on the new catalogue), end of C, end of D.
+
+
 
 ### 31 — records shown under the wrong run, and one programme under two titles (28 Sep)
 
