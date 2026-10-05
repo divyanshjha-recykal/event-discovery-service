@@ -51,6 +51,7 @@ of Phase 1; the Phase 2 plan is below the progress table.
 | 42 | Exa summary returns key dates and the entry-status sentence; highlights aimed at entry details | **Done** — 28 Sep |
 | 43 | One standard opportunity card in Results and the Journey result | **Done** — 28 Sep |
 | 44 | Ranking output cap 12k → 24k (provider ignores the reasoning cap; run 75bead failed on it) | **Done** — 28 Sep |
+| 45 | Tavily-era datasets and the code that only read them removed: `retrieval_set/`, `golden_set/`, old `reference/` files, `run_golden_set.py`, `eval_retrieval.py`, `run_eligibility.py`, `replay.py`, `compare_*.py`, `extraction/golden.py`, `eligibility/criteria_sets.py`, `/api/reference-sets`. Recoverable from git history. | **Done** — 5 Oct |
 
 ## End of Phase 1 — where things stand, 28 September
 
@@ -83,8 +84,9 @@ Measured on runs 48d057, 5249ba and c6a554 (DeepSeek V4.1 Flash, Exa, caps 70/8/
 
 **Data already on hand for Phase 2**, reusable without new credits: 7 runs in Mongo with
 233 search results (165 unique URLs), 39 ranked picks, 47 unique pages with stored text,
-45 extracted candidates and 40 stored opportunities; plus `reference/pool-70386a.json`,
-`reference/exa-pool-652ec9.json` and `reference/candidates.csv`.
+45 extracted candidates and 40 stored opportunities; plus `reference/exa-pool-652ec9.json`
+(35 Exa results from a run no longer in Mongo). All of it is Exa; the Tavily-era sets were
+removed on 5 Oct (item 45).
 
 ## Phase 2 — plan
 
@@ -126,9 +128,9 @@ Two review points need correcting against the code, not just accepting:
 
 ### Budget rules for Phase 2 (F6)
 
-Free tiers: Exa gives $10 of credit a month (~700 searches at our $0.014). Firecrawl free
-credits are limited — record the balance at the start of Phase 2. OpenRouter is paid, at
-cents per run.
+Balances at the start of Phase 2 (5 Oct): **Exa $20.00** (~1,400 searches at $0.014; resets
+monthly), **Firecrawl 643 of 1,000** (resets 21 Oct). OpenRouter is paid, at cents per run.
+Logged in `reference/spend-ledger.md`.
 
 1. **Replay before live.** Every change to planning, ranking, extraction or evaluation is
    first checked against stored data (W1). No live run to test a prompt.

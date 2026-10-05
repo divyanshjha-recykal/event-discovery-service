@@ -34,7 +34,7 @@ from ..discovery.budget import (
     DEFAULT_TOOL_CALLS,
     DEFAULT_WALL_CLOCK_SECONDS,
 )
-from ..eligibility import evaluate_criteria, load_criteria_sets
+from ..eligibility import evaluate_criteria
 from ..paths import REPO_ROOT
 from ..profile import load_business_profile
 from ..reporting import configured_recipients, send_report
@@ -621,29 +621,13 @@ async def clear_database() -> dict:
 
     Destructive and deliberately explicit — the UI puts a confirmation in front
     of it. It removes stored opportunities, the program registry, run history
-    and extraction failures; it does not touch the business profile or the
-    golden set, which are files.
+    and extraction failures; it does not touch the business profile, which is a file.
     """
     deleted = {}
     for name in (OPPORTUNITIES, PROGRAMS, RUNS, EXTRACTION_FAILURES):
         result = await _db[name].delete_many({})
         deleted[name] = result.deleted_count
     return {"deleted": deleted}
-
-
-@app.get("/api/reference-sets")
-async def reference_sets() -> list[dict]:
-    """The hand-written Stage 0 criteria sets, for the eligibility panel."""
-    return [
-        {
-            "number": s.number,
-            "label": s.label,
-            "criterion": s.criterion,
-            "expected_status": s.expected_status,
-            "expects_qualitative": s.expects_qualitative,
-        }
-        for s in load_criteria_sets()
-    ]
 
 
 # The built React page, when it exists. Mounted last so /api/* always wins.

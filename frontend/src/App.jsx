@@ -157,8 +157,8 @@ export default function App() {
             <h3>Clear the database?</h3>
             <p className="small muted">
               Deletes every stored opportunity, the programme registry, all run history
-              and extraction failures. The business profile and golden set are files and
-              are not touched. This cannot be undone.
+              and extraction failures. The business profile is a file and is not
+              touched. This cannot be undone.
             </p>
             <div className="row" style={{ marginTop: 16 }}>
               <button className="danger" type="button" onClick={clearDatabase}>
