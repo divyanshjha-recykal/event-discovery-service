@@ -5,82 +5,91 @@ of Phase 1; the Phase 2 plan is below the progress table.
 
 ## Progress
 
-| # | Change | Status |
-|---|---|---|
-| 1 | Merge rules on the state (C4) | **Done** — 21 Sep |
-| 2 | Saved progress (C5) | **Done** — 21 Sep, now stored in Mongo |
-| 3 | Split the two big functions (C3) | **Done** — 21 Sep, 7 steps |
-| 4 | Fix the contradictions in the focus lines (A1, A2) | **Done** — 22 Sep |
-| 5 | Focus reaches link-following (A4) and analyze (A5) | **A5 done** — A4 **deferred** |
-| 6 | Cut to Awards only (A3) | **Replaced** by Phase 2 W6 (a record shape per opportunity type) |
-| 7 | Quotes for every extracted field (B1) | **Partly** — 3 fields, measured |
-| 8 | Require a date (B2); fix what "ready" means (B3) | **B3 done** — B2 **dropped**, see below |
-| 9 | Ask each question once (C1); carry the answer on (C2) | **C2 done** — C1 not started |
-| 10 | Pool check after ranking (C6) | not started |
-| 11 | Delete dead code and stories (E1, E2) | **E1 done**; E2 done for rank + extract, open for plan + link chooser |
-| 12 | Resource contention exposed by the split | **Done** — 22 Sep |
-| 13 | Let the organiser be "not stated" | **Done** — 22 Sep |
-| 14 | Schemas valid under strict mode, so any provider runs | **Done** — 22 Sep |
-| 15 | No fallbacks in planning; a failed step stops the run | **Done** — 22 Sep |
-| 16 | Deterministic date signals into ranking | **Done** — 23 Sep |
-| 17 | Firecrawl paced per minute, never parallel | **Done** — 23 Sep |
-| 18 | Unknown organiser no longer splits a programme | **Done** — 23 Sep |
-| 19 | Partial dates kept as a note instead of failing the record | **Done** — 23 Sep |
-| 20 | Eligibility given room for its answer | **Done** — 23 Sep |
-| 21 | Budget caps read from one place | **Done** — 23 Sep |
-| 22 | Sites picked against the scrape budget, not tool calls | **Done** — 23 Sep |
-| 23 | Drop duplicate pages: before ranking, and after the seed scrape | **Done** — 23 Sep |
-| 24 | Reuse pages already fetched in an earlier run | not started — Phase 2 W2 |
-| 25 | Test whether the search API can replace some scraping | **Superseded** — Exa returns facts per result (item 33); scraping still needed for conditions |
-| 26 | Remove the last two fallbacks (ranking, saved progress) | **Ranking done** — 23 Sep; saved-progress fallback to memory remains |
-| 27 | A repeatable way to measure a change (D1) | not started — Phase 2 W1 |
-| 28 | Profile v2: fixed sections; constraints and angles read into prompts | **Done** — 23 Sep |
-| 29 | Restore ranking's entrant gate; planner re-asks a short query count | **Done** — 23 Sep |
-| 30 | Results and CSV show everything extracted (manager feedback) | **Partly** — card done 28 Sep (item 43); one server-built CSV not started |
-| 31 | Results list only the run's own records; one programme stored under two titles | not started — Phase 2 W2 |
-| 32 | Ranking fails loudly; no fall back to search order | **Done** — 23 Sep |
-| 33 | Exa as the default search provider, chosen per run from the dashboard | **Done** — 23 Sep |
-| 34 | Model no longer echoes the site URL; code drops nothing on a string mismatch | **Done** — 24 Sep (3 pursued expos had been silently dropped) |
-| 35 | Word-matching title swap in ranking deleted | **Done** — 24 Sep |
-| 36 | Date gate at search deleted; dates go to the ranker as data with their source sentence | **Done** — 24 Sep |
-| 37 | Journey shows the pipeline's own hierarchy; full extracted listing and verdicts per step | **Done** — 24 Sep |
-| 38 | Fetch errors say whether Firecrawl or our pipeline refused the page | **Done** — 24 Sep |
-| 39 | `summary` field on every extracted opportunity | **Done** — 24 Sep |
-| 40 | Email the run CSV from the dashboard, to SMTP_TO only | **Done** — 25 Sep |
-| 41 | Extract: form fields and attendee lists are not conditions; month-only and key dates kept | **Done** — 28 Sep |
-| 42 | Exa summary returns key dates and the entry-status sentence; highlights aimed at entry details | **Done** — 28 Sep |
-| 43 | One standard opportunity card in Results and the Journey result | **Done** — 28 Sep |
-| 44 | Ranking output cap 12k → 24k (provider ignores the reasoning cap; run 75bead failed on it) | **Done** — 28 Sep |
-| 45 | Tavily-era datasets and the code that only read them removed: `retrieval_set/`, `golden_set/`, old `reference/` files, `run_golden_set.py`, `eval_retrieval.py`, `run_eligibility.py`, `replay.py`, `compare_*.py`, `extraction/golden.py`, `eligibility/criteria_sets.py`, `/api/reference-sets`. Recoverable from git history. | **Done** — 5 Oct |
+
+| #   | Change                                                                                                                                                                                                                                                                                                                           | Status                                                                                        |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| 1   | Merge rules on the state (C4)                                                                                                                                                                                                                                                                                                    | **Done** — 21 Sep                                                                             |
+| 2   | Saved progress (C5)                                                                                                                                                                                                                                                                                                              | **Done** — 21 Sep, now stored in Mongo                                                        |
+| 3   | Split the two big functions (C3)                                                                                                                                                                                                                                                                                                 | **Done** — 21 Sep, 7 steps                                                                    |
+| 4   | Fix the contradictions in the focus lines (A1, A2)                                                                                                                                                                                                                                                                               | **Done** — 22 Sep                                                                             |
+| 5   | Focus reaches link-following (A4) and analyze (A5)                                                                                                                                                                                                                                                                               | **A5 done** — A4 **deferred**                                                                 |
+| 6   | Cut to Awards only (A3)                                                                                                                                                                                                                                                                                                          | **Replaced** by Phase 2 W6 (a record shape per opportunity type)                              |
+| 7   | Quotes for every extracted field (B1)                                                                                                                                                                                                                                                                                            | **Partly** — 3 fields, measured                                                               |
+| 8   | Require a date (B2); fix what "ready" means (B3)                                                                                                                                                                                                                                                                                 | **B3 done** — B2 **dropped**, see below                                                       |
+| 9   | Ask each question once (C1); carry the answer on (C2)                                                                                                                                                                                                                                                                            | **C2 done** — C1 not started                                                                  |
+| 10  | Pool check after ranking (C6)                                                                                                                                                                                                                                                                                                    | not started                                                                                   |
+| 11  | Delete dead code and stories (E1, E2)                                                                                                                                                                                                                                                                                            | **E1 done**; E2 done for rank + extract, open for plan + link chooser                         |
+| 12  | Resource contention exposed by the split                                                                                                                                                                                                                                                                                         | **Done** — 22 Sep                                                                             |
+| 13  | Let the organiser be "not stated"                                                                                                                                                                                                                                                                                                | **Done** — 22 Sep                                                                             |
+| 14  | Schemas valid under strict mode, so any provider runs                                                                                                                                                                                                                                                                            | **Done** — 22 Sep                                                                             |
+| 15  | No fallbacks in planning; a failed step stops the run                                                                                                                                                                                                                                                                            | **Done** — 22 Sep                                                                             |
+| 16  | Deterministic date signals into ranking                                                                                                                                                                                                                                                                                          | **Done** — 23 Sep                                                                             |
+| 17  | Firecrawl paced per minute, never parallel                                                                                                                                                                                                                                                                                       | **Done** — 23 Sep                                                                             |
+| 18  | Unknown organiser no longer splits a programme                                                                                                                                                                                                                                                                                   | **Done** — 23 Sep                                                                             |
+| 19  | Partial dates kept as a note instead of failing the record                                                                                                                                                                                                                                                                       | **Done** — 23 Sep                                                                             |
+| 20  | Eligibility given room for its answer                                                                                                                                                                                                                                                                                            | **Done** — 23 Sep                                                                             |
+| 21  | Budget caps read from one place                                                                                                                                                                                                                                                                                                  | **Done** — 23 Sep                                                                             |
+| 22  | Sites picked against the scrape budget, not tool calls                                                                                                                                                                                                                                                                           | **Done** — 23 Sep                                                                             |
+| 23  | Drop duplicate pages: before ranking, and after the seed scrape                                                                                                                                                                                                                                                                  | **Done** — 23 Sep                                                                             |
+| 24  | Reuse pages already fetched in an earlier run                                                                                                                                                                                                                                                                                    | not started — Phase 2 W2                                                                      |
+| 25  | Test whether the search API can replace some scraping                                                                                                                                                                                                                                                                            | **Superseded** — Exa returns facts per result (item 33); scraping still needed for conditions |
+| 26  | Remove the last two fallbacks (ranking, saved progress)                                                                                                                                                                                                                                                                          | **Ranking done** — 23 Sep; saved-progress fallback to memory remains                          |
+| 27  | A repeatable way to measure a change (D1)                                                                                                                                                                                                                                                                                        | not started — Phase 2 W1                                                                      |
+| 28  | Profile v2: fixed sections; constraints and angles read into prompts                                                                                                                                                                                                                                                             | **Done** — 23 Sep                                                                             |
+| 29  | Restore ranking's entrant gate; planner re-asks a short query count                                                                                                                                                                                                                                                              | **Done** — 23 Sep                                                                             |
+| 30  | Results and CSV show everything extracted (manager feedback)                                                                                                                                                                                                                                                                     | **Partly** — card done 28 Sep (item 43); one server-built CSV not started                     |
+| 31  | Results list only the run's own records; one programme stored under two titles                                                                                                                                                                                                                                                   | not started — Phase 2 W2                                                                      |
+| 32  | Ranking fails loudly; no fall back to search order                                                                                                                                                                                                                                                                               | **Done** — 23 Sep                                                                             |
+| 33  | Exa as the default search provider, chosen per run from the dashboard                                                                                                                                                                                                                                                            | **Done** — 23 Sep                                                                             |
+| 34  | Model no longer echoes the site URL; code drops nothing on a string mismatch                                                                                                                                                                                                                                                     | **Done** — 24 Sep (3 pursued expos had been silently dropped)                                 |
+| 35  | Word-matching title swap in ranking deleted                                                                                                                                                                                                                                                                                      | **Done** — 24 Sep                                                                             |
+| 36  | Date gate at search deleted; dates go to the ranker as data with their source sentence                                                                                                                                                                                                                                           | **Done** — 24 Sep                                                                             |
+| 37  | Journey shows the pipeline's own hierarchy; full extracted listing and verdicts per step                                                                                                                                                                                                                                         | **Done** — 24 Sep                                                                             |
+| 38  | Fetch errors say whether Firecrawl or our pipeline refused the page                                                                                                                                                                                                                                                              | **Done** — 24 Sep                                                                             |
+| 39  | `summary` field on every extracted opportunity                                                                                                                                                                                                                                                                                   | **Done** — 24 Sep                                                                             |
+| 40  | Email the run CSV from the dashboard, to SMTP_TO only                                                                                                                                                                                                                                                                            | **Done** — 25 Sep                                                                             |
+| 41  | Extract: form fields and attendee lists are not conditions; month-only and key dates kept                                                                                                                                                                                                                                        | **Done** — 28 Sep                                                                             |
+| 42  | Exa summary returns key dates and the entry-status sentence; highlights aimed at entry details                                                                                                                                                                                                                                   | **Done** — 28 Sep                                                                             |
+| 43  | One standard opportunity card in Results and the Journey result                                                                                                                                                                                                                                                                  | **Done** — 28 Sep                                                                             |
+| 44  | Ranking output cap 12k → 24k (provider ignores the reasoning cap; run 75bead failed on it)                                                                                                                                                                                                                                       | **Done** — 28 Sep                                                                             |
+| 45  | Tavily-era datasets and the code that only read them removed: `retrieval_set/`, `golden_set/`, old `reference/` files, `run_golden_set.py`, `eval_retrieval.py`, `run_eligibility.py`, `replay.py`, `compare_*.py`, `extraction/golden.py`, `eligibility/criteria_sets.py`, `/api/reference-sets`. Recoverable from git history. | **Done** — 5 Oct                                                                              |
+| 46  | Search records every result in full: all Exa fields, highlights, position, query intent | **Done** — 6 Oct |
+| 47  | Exa `opportunity_type` label (award/event/research/other, else "unrecognised"); raw summary and parse status kept; on-type share per search; dashboard shows each result's type and exactly what the ranker read. Ranker does not use the label yet — baseline only | **Done** — 6 Oct |
+| 48  | Research narrative rewritten: peer-reviewed venues, industry/applied tracks, workshops and challenge tracks hosted by established conferences; recognised scholarly bodies preferred (generic, no named list); standalone hackathons, student/individual and developer challenges and paper-mill series excluded. Exa research/other definitions sharpened; new `sponsor` field shown to the ranker; profile Seeking line updated. Baseline to beat: run ba3917 (5 of 34 results labelled research) | **Done** — 6 Oct |
+| 49  | Profile: research topics and current in-house research added under Technology (manager's brief); Seeking split into awards / events / research lines; entrant exclusion reads "individuals entering in their own name". Research brief takes research topics first. Paper one-liners pending. aideadlines.org is a reference for expected output tier only, never a source | **Done** — 8 Oct |
+| 50  | Wave-1 planning says "a kind of opportunity" (was "recognition"). Research runs use Exa's default query-guided highlights (`highlights: true`) instead of the fixed award-style instruction; each search step records `highlights: query/fixed`. Awards, Events, Everything unchanged | **Done** — 8 Oct |
+
 
 ## End of Phase 1 — where things stand, 28 September
 
 Measured on runs 48d057, 5249ba and c6a554 (DeepSeek V4.1 Flash, Exa, caps 70/8/20/30, 6 sites).
 
-| Measure | Value |
-|---|---|
-| Model calls per run | 16–19 |
-| Tokens per run | ~75–90k in; ~7–9k answer; ~43–56k thinking |
-| Model cost per run | ~$0.045–0.050 |
-| Exa per run | 4–5 searches × $0.014 = ~$0.06–0.07 |
-| Scrapes per run | 4–14 of 20 |
-| Wall time | 5–15 min, most of it paced scraping and model thinking |
-| Opportunities saved per run | 1–6 |
-| Largest call against its output cap | extract 60%, plan wave 2 51%, evaluate 44%, rank 35% |
+
+| Measure                             | Value                                                  |
+| ----------------------------------- | ------------------------------------------------------ |
+| Model calls per run                 | 16–19                                                  |
+| Tokens per run                      | ~75–90k in; ~7–9k answer; ~43–56k thinking             |
+| Model cost per run                  | ~$0.045–0.050                                          |
+| Exa per run                         | 4–5 searches × $0.014 = ~$0.06–0.07                    |
+| Scrapes per run                     | 4–14 of 20                                             |
+| Wall time                           | 5–15 min, most of it paced scraping and model thinking |
+| Opportunities saved per run         | 1–6                                                    |
+| Largest call against its output cap | extract 60%, plan wave 2 51%, evaluate 44%, rank 35%   |
+
 
 **What limits results today**, in order of effect:
 
 1. **Link discovery is starved.** Firecrawl runs with main content only, which strips site
-   navigation — where "Key dates", "Nominate" and "Eligibility" links live. Seed pages yield
+  navigation — where "Key dates", "Nominate" and "Eligibility" links live. Seed pages yield
    0–29 links and the link picker is usually offered 1–3. SABERA was offered one link, back to
    itself, so its deadline page was never reached.
 2. **Ranking passes fewer sites than there are seats.** In 4 of the last 5 runs everything
-   that passed was fetched; order never mattered. It also passes weak pages (attendee and
+  that passed was fetched; order never mattered. It also passes weak pages (attendee and
    speaker lists) as "enterable".
 3. **Budget goes unspent.** Runs use 4–5 of 8 searches; re-planning only happens when
-   nothing at all is found.
+  nothing at all is found.
 4. **Extract's pursue decision is lenient.** Evaluation catches it (Zarabi: "early-stage only",
-   not met), but the record is still stored as ready.
+  not met), but the record is still stored as ready.
 
 **Data already on hand for Phase 2**, reusable without new credits: 7 runs in Mongo with
 233 search results (165 unique URLs), 39 ranked picks, 47 unique pages with stored text,
@@ -94,37 +103,39 @@ removed on 5 Oct (item 45).
 
 From the Phase 1 review:
 
-| # | Feedback | Workstream |
-|---|---|---|
-| F1 | No caching: the same searches and pages are paid for again | W2 |
-| F2 | Cataloguing is convoluted; this is a cataloguing problem — know it once, store it structured, don't rediscover | W2 |
-| F3 | Sharpen domain-based search: get more from one search instead of many broad ones; explore component costs as a domain | W3 |
-| F4 | Test a dedicated re-ranker on a small batched eval against the current ranking | W4 |
-| F5 | Define the confidence scoring: how aligned an opportunity is with the organisation | W5 |
-| F6 | Stay on free tiers; testing must not exhaust them | Budget rules below |
-| F7 | No confidence at the decision points (search, selection, pursue/skip) | W5 |
-| F8 | Evaluation judges conditions without the source page | W5 |
-| F9 | Queries framed on product terms, not technology and demonstrated impact | W3 |
-| F10 | Uniform model across nodes | W8 |
-| F11 | No repeatable measurement of quality | W1 |
-| F12 | Default tool-call budget insufficient for a full cycle | W1, then re-size |
-| F13 | Hand-labelled set for scoring retrieval with a re-ranker | W1, W4 |
-| F14 | Classify by opportunity type; run per type | W6 |
-| F15 | Discovery window (e.g. next 6 months) | W7 |
-| F16 | No outbound notification | W7 |
-| F17 | Deeper and wider on paid tiers | Deferred until W1–W3 show where depth pays |
-| F18 | The programmes registry should drive the search | W2, W7 |
-| F19 | Scheduled autonomous runs | W7 |
-| F20 | Technical and research axis searched on the engineering | W3, W6 |
-| F21 | Search specificity: is an Awards or Events run enforced, and is it cheaper than Everything? | W3 (specificity) |
-| F22 | Search for cheaper or better components for the RVM product line | W9 |
+
+| #   | Feedback                                                                                                              | Workstream                                 |
+| --- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| F1  | No caching: the same searches and pages are paid for again                                                            | W2                                         |
+| F2  | Cataloguing is convoluted; this is a cataloguing problem — know it once, store it structured, don't rediscover        | W2                                         |
+| F3  | Sharpen domain-based search: get more from one search instead of many broad ones; explore component costs as a domain | W3                                         |
+| F4  | Test a dedicated re-ranker on a small batched eval against the current ranking                                        | W4                                         |
+| F5  | Define the confidence scoring: how aligned an opportunity is with the organisation                                    | W5                                         |
+| F6  | Stay on free tiers; testing must not exhaust them                                                                     | Budget rules below                         |
+| F7  | No confidence at the decision points (search, selection, pursue/skip)                                                 | W5                                         |
+| F8  | Evaluation judges conditions without the source page                                                                  | W5                                         |
+| F9  | Queries framed on product terms, not technology and demonstrated impact                                               | W3                                         |
+| F10 | Uniform model across nodes                                                                                            | W8                                         |
+| F11 | No repeatable measurement of quality                                                                                  | W1                                         |
+| F12 | Default tool-call budget insufficient for a full cycle                                                                | W1, then re-size                           |
+| F13 | Hand-labelled set for scoring retrieval with a re-ranker                                                              | W1, W4                                     |
+| F14 | Classify by opportunity type; run per type                                                                            | W6                                         |
+| F15 | Discovery window (e.g. next 6 months)                                                                                 | W7                                         |
+| F16 | No outbound notification                                                                                              | W7                                         |
+| F17 | Deeper and wider on paid tiers                                                                                        | Deferred until W1–W3 show where depth pays |
+| F18 | The programmes registry should drive the search                                                                       | W2, W7                                     |
+| F19 | Scheduled autonomous runs                                                                                             | W7                                         |
+| F20 | Technical and research axis searched on the engineering                                                               | W3, W6                                     |
+| F21 | Search specificity: is an Awards or Events run enforced, and is it cheaper than Everything?                           | W3 (specificity)                           |
+| F22 | Search for cheaper or better components for the RVM product line                                                      | W9                                         |
+
 
 Two review points need correcting against the code, not just accepting:
 
 - **"No parallel execution."** Fetch and extract already run one lane per site in parallel.
-  Firecrawl scrapes are serialised on purpose, because the free tier caps requests per minute.
+Firecrawl scrapes are serialised on purpose, because the free tier caps requests per minute.
 - **"Tool-call budget insufficient."** Recent runs use 17–33 of 70. The binding limit is how
-  few sites ranking passes, not the cap. Re-size only after W1 can measure the effect.
+few sites ranking passes, not the cap. Re-size only after W1 can measure the effect.
 
 ### Budget rules for Phase 2 (F6)
 
@@ -133,10 +144,10 @@ monthly), **Firecrawl 643 of 1,000** (resets 21 Oct). OpenRouter is paid, at cen
 Logged in `reference/spend-ledger.md`.
 
 1. **Replay before live.** Every change to planning, ranking, extraction or evaluation is
-   first checked against stored data (W1). No live run to test a prompt.
+  first checked against stored data (W1). No live run to test a prompt.
 2. **One live run per milestone**, not per change. Each costs ~5 Exa searches and ~15 scrapes.
 3. **A spend ledger** (`reference/spend-ledger.md`): date, what was tested, searches, scrapes,
-   model cost, remaining balances. Updated after every live call.
+  model cost, remaining balances. Updated after every live call.
 4. **Cache first (W2)** so that repeated tests read stored pages instead of re-scraping.
 5. **Credit-spending tests need an explicit yes**, as in Phase 1.
 
@@ -145,11 +156,11 @@ Logged in `reference/spend-ledger.md`.
 **W1 — Measurement: labelled set and replay** (F11, F12, F13; item 27)
 
 - Label the 165 unique search results already stored: is it the programme's own page, can
-  Retearn enter, is it current, which opportunity type. A small labelling page or a CSV.
+Retearn enter, is it current, which opportunity type. A small labelling page or a CSV.
 - Label the 45 extracted candidates: correct pursue/skip, correct deadline, conditions real.
 - A replay harness that runs ranking, extract and evaluation on stored inputs and scores
-  against the labels: precision of the top sites fetched, passed-good vs passed-bad, correct
-  dates, condition verdicts matching a human's.
+against the labels: precision of the top sites fetched, passed-good vs passed-bad, correct
+dates, condition verdicts matching a human's.
 - **Credits:** no search or scrape; about $0.01–0.05 of model per replay.
 - **Done when:** a change can be scored in minutes and compared to the Phase 1 baseline.
 
@@ -157,36 +168,38 @@ Logged in `reference/spend-ledger.md`.
 
 Three stores, each with one job:
 
-| Store | Key | Holds | Used for |
-|---|---|---|---|
-| Search cache | provider + query | results with Exa facts, fetched date | re-running a query within its TTL costs nothing |
-| Page cache | canonical URL | page text, links, content hash, fetched date, outcome | a page read in the last N days is not re-scraped; a changed hash marks the programme for re-check |
-| Catalogue | programme id | names and aliases, organiser, known URLs, type, editions with dates, last verified, next expected window, status | "already known" is shown to ranking; known programmes are refreshed, not rediscovered |
+
+| Store        | Key              | Holds                                                                                                            | Used for                                                                                          |
+| ------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Search cache | provider + query | results with Exa facts, fetched date                                                                             | re-running a query within its TTL costs nothing                                                   |
+| Page cache   | canonical URL    | page text, links, content hash, fetched date, outcome                                                            | a page read in the last N days is not re-scraped; a changed hash marks the programme for re-check |
+| Catalogue    | programme id     | names and aliases, organiser, known URLs, type, editions with dates, last verified, next expected window, status | "already known" is shown to ranking; known programmes are refreshed, not rediscovered             |
+
 
 - **Two kinds of run:** a *refresh* re-checks catalogued programmes whose window is near (no
-  search, one scrape each); a *discovery* searches only for what the catalogue does not know.
+search, one scrape each); a *discovery* searches only for what the catalogue does not know.
 - **Identity (item 31):** one programme under two titles is resolved in the catalogue. Same
-  site + same organiser + same year is not a safe rule (raceexpos.com holds two real
-  programmes), so a candidate match goes to a small model check or a merge in the dashboard.
+site + same organiser + same year is not a safe rule (raceexpos.com holds two real
+programmes), so a candidate match goes to a small model check or a merge in the dashboard.
 - **Seeding:** the 47 stored pages and 40 stored opportunities seed the page cache and
-  catalogue, so W2 starts with data and no credits.
+catalogue, so W2 starts with data and no credits.
 - **Model prompt caching:** put the stable part of each prompt (profile, rules) first so the
-  provider's prefix cache applies. Cached reads today are only a few thousand tokens a run.
+provider's prefix cache applies. Cached reads today are only a few thousand tokens a run.
 - **Done when:** a second run on the same queries spends no search or scrape credits on
-  anything already known, and the Results page shows one record per programme.
+anything already known, and the Results page shows one record per programme.
 
 **W3 — Search economy and domain sharpening** (F3, F9, F20)
 
 - **More per search:** Exa bills up to 10 results in the base price; we ask for 7. Ask for 10.
-  Richer summary fields are free per page (item 42 did this for dates).
+Richer summary fields are free per page (item 42 did this for dates).
 - **Listing pages become leads:** a directory page that names ten programmes is dropped today.
-  Extract the names into the catalogue as unverified leads for later refresh runs.
+Extract the names into the catalogue as unverified leads for later refresh runs.
 - **Fix link discovery** (limit 1 above): take links from the full page while keeping the
-  main-content text. Needs a 2-scrape test of Firecrawl's behaviour first.
+main-content text. Needs a 2-scrape test of Firecrawl's behaviour first.
 - **Queries on technology and impact**, per opportunity type, taken from the profile's
-  Search angles; checked against the W1 labels, not by eye.
+Search angles; checked against the W1 labels, not by eye.
 - **Component costs:** a separate objective (procurement, not recognition). Scope it as its
-  own profile section and record type once W1–W2 exist, not inside the opportunity flow.
+own profile section and record type once W1–W2 exist, not inside the opportunity flow.
 - **Credits:** ~10–20 Exa searches and 2 scrapes of targeted tests.
 
 *Search specificity (F21).* Today the focus is one prompt line in plan, rank, link picking
@@ -196,28 +209,28 @@ scrapes, but only because fewer results passed ranking. The change: **type becom
 that code enforces.**
 
 1. **Measure:** add type to the W1 labels; replay ranking per focus on stored pools. Metrics:
-   on-type share of fetched sites; searches + scrapes per on-type record saved. No credits.
+  on-type share of fetched sites; searches + scrapes per on-type record saved. No credits.
 2. **Type on every result:** an `opportunity_type` field in Exa's summary (free, billed per
-   page) and on each ranked pick. When a type is chosen, code does not fetch off-type picks
+  page) and on each ranked pick. When a type is chosen, code does not fetch off-type picks
    (set aside, visible) and stores off-type records to the catalogue only, not the run's Results.
 3. **A playbook per type**, in one config block: what the type is called on the web, what to
-   pair it with (field and impact; technical subfield for research), what to avoid, and known
+  pair it with (field and impact; technical subfield for research), what to avoid, and known
    source domains via Exa's domain filter.
 4. **A budget per type** (start: awards 6 searches × 3 pages; events 4 × 2; research 4 × 2),
-   with 10 results per search and catalogue-first refresh.
+  with 10 results per search and catalogue-first refresh.
 5. **Validate:** ~15 Exa searches (5 per type), on cached pages where possible.
-   **Done when:** ≥90% of fetched sites match the chosen type, and searches and scrapes per
+  **Done when:** ≥90% of fetched sites match the chosen type, and searches and scrapes per
    on-type record fall below the Everything baseline.
 
 **W4 — Re-ranker feasibility** (F4, F13)
 
 - Compare on the W1 labelled pool, in small batches: (a) the current listwise model ranking,
-  (b) a dedicated re-ranker, (c) Exa's own order.
+(b) a dedicated re-ranker, (c) Exa's own order.
 - Candidate re-ranker within the approved model families: **Qwen3-Reranker** (open weights,
-  runs locally, so no credits).
+runs locally, so no credits).
 - Measure precision of the top 6, the good pages missed, cost and time per pool.
 - **Decision gate:** adopt only if it beats (a) on the labels. It may also serve as a cheap
-  first pass that trims the pool before the model ranks it.
+first pass that trims the pool before the model ranks it.
 
 **W5 — Confidence and alignment, defined** (F5, F7, F8)
 
@@ -225,9 +238,9 @@ Written as a specification before code, then checked on the W1 labels. Two separ
 never blended into one number:
 
 - **Fit** — how aligned the opportunity is with the organisation: hard conditions met / not
-  met / unknown, and whether the type is one the profile seeks.
+met / unknown, and whether the type is one the profile seeks.
 - **Certainty** — how sure we are of the facts: own page read, deadline found and quoted,
-  conditions found, date conflicts flagged.
+conditions found, date conflicts flagged.
 
 Outputs are tiers with reasons (e.g. Eligible / Likely / Needs review / Not eligible), not a
 decimal score. Every decision point records its own confidence and reason: rank per pick,
@@ -244,19 +257,19 @@ deadline. Runs can target one type. This removes attendee lists being judged as 
 **W7 — Time window, registry-driven runs, scheduling, notification** (F15, F16, F18, F19)
 
 - A rolling window per run (default 6 months): applied at ranking where dates are known and at
-  storing, where out-of-window records go to the catalogue only.
+storing, where out-of-window records go to the catalogue only.
 - A weekly scheduled run: refresh what the catalogue says is due, then discovery with what
-  budget remains.
+budget remains.
 - An email digest after each scheduled run: new, changed, closing within 14 days. Reuses the
-  existing mailer and SMTP_TO.
+existing mailer and SMTP_TO.
 
 **W8 — Model per call type and remaining clean-up** (F10; items 26, 30)
 
 - Choose a model per call from W1 scores: strongest where a wrong call wastes scrapes
-  (ranking), cheaper for bulk reading. Turn reasoning off where it adds nothing (link picking).
+(ranking), cheaper for bulk reading. Turn reasoning off where it adds nothing (link picking).
 - One server-built CSV for Download and Email (item 30); remove the memory fallback for saved
-  progress (item 26); delete `profile_seed.py`; rewrite `CLAUDE.md`; drop the digit/"must"
-  flag (E4).
+progress (item 26); delete `profile_seed.py`; rewrite `CLAUDE.md`; drop the digit/"must"
+flag (E4).
 
 **W9 — Component sourcing for the RVM line** (F22)
 
@@ -264,18 +277,21 @@ A second objective on the same pipeline: find cheaper or better components for t
 product line. Procurement, not recognition, so it has its own brief, record and evaluation,
 and never mixes with opportunity runs.
 
-| Step | Opportunity runs | Component runs |
-|---|---|---|
-| Input | Business profile | **Component brief**, one per part: function, must-have specs, nice-to-have specs, current part and price, target (cheaper by X%, or better at Y) |
-| Plan | Queries from the profile | Queries from the function and specs, plus the current part number for drop-in alternatives |
-| Search | Exa | Exa to **discover** suppliers and alternatives; **distributor APIs** (e.g. Octopart/Nexar, DigiKey, Mouser) for price breaks, stock and lead time — terms and free tiers to be checked |
-| Rank | Programme page, enterable, current | Real product page, buyable in India, plausibly meets the must-have specs |
-| Extract | Conditions, deadline | Datasheet specs, price breaks, minimum order, lead time, certifications |
-| Evaluate | Conditions vs profile | **Specs vs the brief, same mechanism:** each must-have spec Met / Not met / Unclear; quality and reliability go to a person |
-| Compare | — | **Price difference computed in code** against the BOM baseline, never by the model |
-| Catalogue (W2) | Programmes and editions | Components → alternatives → last price, stock and date checked |
+
+| Step           | Opportunity runs                   | Component runs                                                                                                                                                                         |
+| -------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Input          | Business profile                   | **Component brief**, one per part: function, must-have specs, nice-to-have specs, current part and price, target (cheaper by X%, or better at Y)                                       |
+| Plan           | Queries from the profile           | Queries from the function and specs, plus the current part number for drop-in alternatives                                                                                             |
+| Search         | Exa                                | Exa to **discover** suppliers and alternatives; **distributor APIs** (e.g. Octopart/Nexar, DigiKey, Mouser) for price breaks, stock and lead time — terms and free tiers to be checked |
+| Rank           | Programme page, enterable, current | Real product page, buyable in India, plausibly meets the must-have specs                                                                                                               |
+| Extract        | Conditions, deadline               | Datasheet specs, price breaks, minimum order, lead time, certifications                                                                                                                |
+| Evaluate       | Conditions vs profile              | **Specs vs the brief, same mechanism:** each must-have spec Met / Not met / Unclear; quality and reliability go to a person                                                            |
+| Compare        | —                                  | **Price difference computed in code** against the BOM baseline, never by the model                                                                                                     |
+| Catalogue (W2) | Programmes and editions            | Components → alternatives → last price, stock and date checked                                                                                                                         |
+
 
 **Rules:**
+
 - Price arithmetic happens in code from structured data. The model only judges spec fit.
 - BOM costs stay local; only specs go to the model provider, unless approved otherwise.
 - Prefer distributor APIs to scraping storefronts: structured, current, and within terms of use.
@@ -289,17 +305,17 @@ part and per machine, so every alternative reads as "saves ₹X per machine at t
 **Data to request from the inventory team** (start now; it takes time to collect):
 
 - Per RVM model (Reklaim PRO, ACE, Mini, Neo, FastScan), the BOM with, per line: component
-  name and subsystem; manufacturer and part number (MPN); current supplier(s), imported or
-  sourced in India; unit cost with currency, duty and freight, and the date of that price;
-  quantity per machine; machines built per year, actual and planned; minimum order quantity;
-  lead time; history of stock-outs, price rises or quality failures.
+name and subsystem; manufacturer and part number (MPN); current supplier(s), imported or
+sourced in India; unit cost with currency, duty and freight, and the date of that price;
+quantity per machine; machines built per year, actual and planned; minimum order quantity;
+lead time; history of stock-outs, price rises or quality failures.
 - For the parts they most want improved: datasheet and the specs that matter (electrical,
-  interface, size, operating temperature, ingress rating); required certifications (BIS, CE,
-  RoHS…); swappable or locked by design, firmware or certification, and the requalification
-  effort; alternatives already tried and why rejected; the target (cheaper by how much, or
-  better at what).
+interface, size, operating temperature, ingress rating); required certifications (BIS, CE,
+RoHS…); swappable or locked by design, firmware or certification, and the requalification
+effort; alternatives already tried and why rejected; the target (cheaper by how much, or
+better at what).
 - Constraints: approved vendor list; preference for Indian or local suppliers; which data may
-  go to an external AI provider and which must stay internal.
+go to an external AI provider and which must stay internal.
 
 **Depends on:** W1 (labels and replay, extended to components), W2 (catalogue), W5 (fit and
 certainty, reused for spec matching). **Credits:** pilot of ~3–5 searches per part plus API
@@ -308,27 +324,27 @@ with every must-have spec Met, a computed price difference, and its datasheet as
 
 ### Order
 
-| Stage | Workstreams | Credits needed | Why this order |
-|---|---|---|---|
-| A — Foundations | W1, W2; W9 data request to inventory | None (stored data) | Everything after is measured by W1 and made cheaper by W2; the BOM takes time to collect |
-| B — Definitions | W5, W6, W7 window | None (replay) | Changes what counts as good, so it comes before tuning |
-| C — Retrieval | W3 including specificity, W4 | Small: ~35 searches, 2 scrapes | Tuned against labels, on cached pages |
-| C′ — Components | W9 pilot on 3–5 parts | Small: ~15–25 searches, API free tiers | Reuses W1, W2 and W5 once they exist |
-| D — Autonomy | W7 schedule + digest, W8 | One live run per milestone | Only worth scheduling once results are measured good |
-| Later | Paid tiers (F17) | Paid | Only where W1 shows depth is the limit |
+
+| Stage           | Workstreams                          | Credits needed                         | Why this order                                                                           |
+| --------------- | ------------------------------------ | -------------------------------------- | ---------------------------------------------------------------------------------------- |
+| A — Foundations | W1, W2; W9 data request to inventory | None (stored data)                     | Everything after is measured by W1 and made cheaper by W2; the BOM takes time to collect |
+| B — Definitions | W5, W6, W7 window                    | None (replay)                          | Changes what counts as good, so it comes before tuning                                   |
+| C — Retrieval   | W3 including specificity, W4         | Small: ~35 searches, 2 scrapes         | Tuned against labels, on cached pages                                                    |
+| C′ — Components | W9 pilot on 3–5 parts                | Small: ~15–25 searches, API free tiers | Reuses W1, W2 and W5 once they exist                                                     |
+| D — Autonomy    | W7 schedule + digest, W8             | One live run per milestone             | Only worth scheduling once results are measured good                                     |
+| Later           | Paid tiers (F17)                     | Paid                                   | Only where W1 shows depth is the limit                                                   |
+
 
 Milestone live runs: end of A (baseline on the new catalogue), end of C, end of D.
-
-
 
 ### 31 — records shown under the wrong run, and one programme under two titles (28 Sep)
 
 - **Display:** `/api/runs/{id}/results` finds records by source URL, so an older record at
-  the same URL shows under a newer run (22ff3a's "Circular Economy Awards" under 48d057).
-  Fix: match on URL and title from the run's `save_opportunity` events.
+the same URL shows under a newer run (22ff3a's "Circular Economy Awards" under 48d057).
+Fix: match on URL and title from the run's `save_opportunity` events.
 - **Storage:** identity is organiser + base title + cycle year, so "Circular Economy Awards"
-  and "Global Circular Economy Awards" are two records. Same URL + organiser + year is not
-  a safe merge rule: raceexpos.com legitimately holds an expo and its speaker programme.
+and "Global Circular Economy Awards" are two records. Same URL + organiser + year is not
+a safe merge rule: raceexpos.com legitimately holds an expo and its speaker programme.
 
 ### 30 — Results and CSV show everything extracted (manager feedback, 25 Sep)
 
@@ -337,14 +353,14 @@ record notes the page contradicts itself on the closing date; the CSV drops it.
 
 - **Store three more fields:** extract's pursue reason, the ranker's reason, the page's status.
 - **Results card, ordered for the decision:** header with days to deadline; what it is;
-  why it's here; each condition with verdict and reason, then judgement calls; what to
-  submit and how it's judged; check before acting (uncertainty, gaps, unfound quotes,
-  flagged conditions); sources and the quoted sentences.
+why it's here; each condition with verdict and reason, then judgement calls; what to
+submit and how it's judged; check before acting (uncertainty, gaps, unfound quotes,
+flagged conditions); sources and the quoted sentences.
 - **One CSV, built on the server,** for both Download and Email. Opportunities sheet
-  gains summary, days left, deadline note, reasons, uncertainty, gaps, and conditions
-  with verdicts; a second Conditions sheet has one row per condition.
+gains summary, days left, deadline note, reasons, uncertainty, gaps, and conditions
+with verdicts; a second Conditions sheet has one row per condition.
 - Today the dashboard CSV (`frontend/src/export.js`) and the emailed CSV
-  (`src/opportunity_radar/reporting.py`) are separate code and already differ.
+(`src/opportunity_radar/reporting.py`) are separate code and already differ.
 
 ### 14 to 22 — what changed, 22-23 September
 
@@ -442,11 +458,13 @@ Revisit A4 only if depth-3 runs show the wrong pages being chosen.
 Splitting `fetch` into one instance per site changed *when* resources are spent,
 not how many. Three things broke on the first live run:
 
-| Problem | Cause | Fix |
-|---|---|---|
-| 4 scrapes lost to `Rate Limit Exceeded` | 8 sites fetching at once burst past Firecrawl's per-minute cap | scrapes queue through one lane |
-| 3 sites scraped then never read | all 8 link-picks ran before any analysis, exhausting the 16-call model cap | `rank` now sizes its picks against the model-call budget too, and the caps were raised to fit 8 sites |
-| `select_links` returned nothing | `reasoning: {effort: "low"}` is advisory; nothing was reserved for the answer | an explicit `reasoning.max_tokens` reserve, same as every other call |
+
+| Problem                                 | Cause                                                                         | Fix                                                                                                   |
+| --------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| 4 scrapes lost to `Rate Limit Exceeded` | 8 sites fetching at once burst past Firecrawl's per-minute cap                | scrapes queue through one lane                                                                        |
+| 3 sites scraped then never read         | all 8 link-picks ran before any analysis, exhausting the 16-call model cap    | `rank` now sizes its picks against the model-call budget too, and the caps were raised to fit 8 sites |
+| `select_links` returned nothing         | `reasoning: {effort: "low"}` is advisory; nothing was reserved for the answer | an explicit `reasoning.max_tokens` reserve, same as every other call                                  |
+
 
 The third was not caused by the split — `TOKENS_PICK_LINKS` and `light=True` are
 unchanged since the "working pipeline" commit. It became *visible* because
@@ -507,33 +525,35 @@ plan → search → rank ─┬─(one per site)→ fetch → extract ─→ eva
                       └── pool too thin ────→ plan ←─ nothing found ──┘
 ```
 
-| Step | Job | Reaches out to |
-|---|---|---|
-| `plan` | write the search queries | the model |
-| `search` | run the queries not yet run, in two waves | `tool_tavily_search` |
-| `rank` | order the whole pool best-first, choose sites **and say why** | the model, Mongo |
-| `fetch` | get the pages for **one** site | `tool_firecrawl_fetch`, the model |
-| `extract` | read **one** site, build and check its records | the model |
-| `evaluate` | judge each record against the profile, condition by condition | the model |
-| `store` | write each record once, with its verdict | Mongo |
+
+| Step       | Job                                                           | Reaches out to                    |
+| ---------- | ------------------------------------------------------------- | --------------------------------- |
+| `plan`     | write the search queries                                      | the model                         |
+| `search`   | run the queries not yet run, in two waves                     | `tool_tavily_search`              |
+| `rank`     | order the whole pool best-first, choose sites **and say why** | the model, Mongo                  |
+| `fetch`    | get the pages for **one** site                                | `tool_firecrawl_fetch`, the model |
+| `extract`  | read **one** site, build and check its records                | the model                         |
+| `evaluate` | judge each record against the profile, condition by condition | the model                         |
+| `store`    | write each record once, with its verdict                      | Mongo                             |
+
 
 **What actually changed, beyond the names:**
 
 - **The reason a site was chosen now reaches the step that reads it.** `rank`
-  worked out why each site was worth fetching, and the old code ended with the
-  line `_ = reason` — computed and thrown away. It is now carried to `extract`
-  and put in front of the model as something to confirm or contradict.
+worked out why each site was worth fetching, and the old code ended with the
+line `_ = reason` — computed and thrown away. It is now carried to `extract`
+and put in front of the model as something to confirm or contradict.
 - **Judging happens before storing.** A record is written once, already
-  carrying its verdict. It used to be saved first and judged after, which is
-  why a run could report success before anything had been judged.
+carrying its verdict. It used to be saved first and judged after, which is
+why a run could report success before anything had been judged.
 - **A failure names the step that broke.** One dead site fails its own `fetch`
-  and the other sites carry on; before, they shared a step with everything else.
+and the other sites carry on; before, they shared a step with everything else.
 - **One place decides whether to search again.** `evaluate` is the only point
-  where all sites have come back together, so the re-plan decision lives there.
-  Per-site counting would have counted four empty sites as four re-plans.
-- **Every write to Mongo is in `store`.** Past editions used to be written from
-  the middle of the old finalize step; they are now handed to `store` with the
-  rejection that produced them.
+where all sites have come back together, so the re-plan decision lives there.
+Per-site counting would have counted four empty sites as four re-plans.
+- **Every write to Mongo is in** `store`**.** Past editions used to be written from
+the middle of the old finalize step; they are now handed to `store` with the
+rejection that produced them.
 
 **The grounding check, as agreed: a measurement, never a gate.** The model
 returns the sentence it read a value from, and the code checks that its own
@@ -566,33 +586,37 @@ piece of code reaches out to, not what the model can pick.
 
 #### What we have now — 4 steps
 
-| Step | Lines | Jobs it does | What it calls |
-|---|---|---|---|
-| `plan_queries` | 107 | write the opening searches | OpenRouter, Mongo (journey) |
-| `research` | **204** | run the first searches · **write a second set of searches** · run those · build and de-duplicate the pool · look up sites earlier runs found empty · rank the pool · fetch each chosen site and follow its links | Tavily, OpenRouter ×3 kinds, Firecrawl, Mongo |
-| `analyze` | 114 | read each site's pages in a loop, one after another | OpenRouter, Mongo (journey) |
-| `finalize` | **283** | build a record · check it is complete · check it is still live · record a past edition · save it · mark or clear a dead end · judge it against the profile · attach the verdict · write the summary | OpenRouter, Mongo ×7 kinds |
+
+| Step           | Lines   | Jobs it does                                                                                                                                                                                                     | What it calls                                 |
+| -------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `plan_queries` | 107     | write the opening searches                                                                                                                                                                                       | OpenRouter, Mongo (journey)                   |
+| `research`     | **204** | run the first searches · **write a second set of searches** · run those · build and de-duplicate the pool · look up sites earlier runs found empty · rank the pool · fetch each chosen site and follow its links | Tavily, OpenRouter ×3 kinds, Firecrawl, Mongo |
+| `analyze`      | 114     | read each site's pages in a loop, one after another                                                                                                                                                              | OpenRouter, Mongo (journey)                   |
+| `finalize`     | **283** | build a record · check it is complete · check it is still live · record a past edition · save it · mark or clear a dead end · judge it against the profile · attach the verdict · write the summary              | OpenRouter, Mongo ×7 kinds                    |
+
 
 The two problems this causes:
 
 - `research` calls the **planner** inside itself. The picture says four steps;
-  the code runs seven.
+the code runs seven.
 - `analyze` and `finalize` loop over sites and records inside one step, so a
-  failure on the fourth site loses the first three, and the five analyze calls
-  run one after another instead of together.
+failure on the fourth site loses the first three, and the five analyze calls
+run one after another instead of together.
 
 #### What replaces it — 8 steps
 
-| Step | Its one job | Reads | Writes | Calls |
-|---|---|---|---|---|
-| `plan` | write search queries | profile, focus, what earlier searches returned | queries | OpenRouter |
-| `search` | run queries not yet run | queries | search results | Tavily |
-| `rank` | order the pool, decide what is worth fetching | search results, profile, focus | the chosen sites **and why** | OpenRouter, Mongo (sites known empty) |
-| `fetch` | get the pages for **one** site | one chosen site | that site's pages | Firecrawl, OpenRouter (which links to follow) |
-| `analyze` | read **one** site's pages, list what is on it | one site's pages, profile, **the reason rank chose it** | candidates | OpenRouter |
-| `build` | turn a candidate into a record and check its fields against the page | candidates, pages | records, rejections | none — plain code |
-| `store` | save records, past editions, dead ends | records | saved ids | Mongo |
-| `judge` | decide if we qualify, condition by condition | records, profile | verdicts | OpenRouter, Mongo |
+
+| Step      | Its one job                                                          | Reads                                                   | Writes                       | Calls                                         |
+| --------- | -------------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------- | --------------------------------------------- |
+| `plan`    | write search queries                                                 | profile, focus, what earlier searches returned          | queries                      | OpenRouter                                    |
+| `search`  | run queries not yet run                                              | queries                                                 | search results               | Tavily                                        |
+| `rank`    | order the pool, decide what is worth fetching                        | search results, profile, focus                          | the chosen sites **and why** | OpenRouter, Mongo (sites known empty)         |
+| `fetch`   | get the pages for **one** site                                       | one chosen site                                         | that site's pages            | Firecrawl, OpenRouter (which links to follow) |
+| `analyze` | read **one** site's pages, list what is on it                        | one site's pages, profile, **the reason rank chose it** | candidates                   | OpenRouter                                    |
+| `build`   | turn a candidate into a record and check its fields against the page | candidates, pages                                       | records, rejections          | none — plain code                             |
+| `store`   | save records, past editions, dead ends                               | records                                                 | saved ids                    | Mongo                                         |
+| `judge`   | decide if we qualify, condition by condition                         | records, profile                                        | verdicts                     | OpenRouter, Mongo                             |
+
 
 `fetch` and `analyze` run once **per site, at the same time**, which the merge
 rules from step 1 now allow. `plan`, `search` and `rank` can each be visited
@@ -616,15 +640,15 @@ more than once when the pool comes back thin.
 #### What this buys
 
 - A failure lands in a named small step. Today a failure anywhere in fetching,
-  ranking or planning reports as "research failed".
+ranking or planning reports as "research failed".
 - Five sites are read at the same time instead of one after another — on the
-  runs we have measured, about 300 seconds becomes about 60.
+runs we have measured, about 300 seconds becomes about 60.
 - With progress saved per step, a run that dies during `analyze` keeps its
-  searches and its fetches.
+searches and its fetches.
 - `rank`'s reason for choosing a site can be handed to `analyze`, which today is
-  thrown away one line after it is produced.
+thrown away one line after it is produced.
 - Two places that decide things get separated from the places that fetch, so
-  each can be checked on its own without a live run.
+each can be checked on its own without a live run.
 
 #### What it needs that we do not have yet
 
@@ -726,9 +750,9 @@ by better searching.
 **Fix.** Two options, and I would take the first.
 
 1. **Remove Events and Research for now.** Get Awards working end to end, then
-   add the others back with their own record shape.
+  add the others back with their own record shape.
 2. Give each kind its own definition of "what makes this finished" — an award
-   needs entry conditions, an event needs a date and a way to take part, a
+  needs entry conditions, an event needs a date and a way to take part, a
    research venue needs a topic scope and a submission deadline.
 
 **Why this fix.** Option 2 is the right end state but it is a week of work
@@ -922,10 +946,12 @@ retries per run.
 
 **Problem.**
 
-| Question | Asked in |
-|---|---|
-| Is this still open? | ranking prompt → analyze prompt → `assess_actionability` |
-| Is this for a business like ours? | ranking prompt → analyze prompt → `evaluate()` |
+
+| Question                          | Asked in                                                 |
+| --------------------------------- | -------------------------------------------------------- |
+| Is this still open?               | ranking prompt → analyze prompt → `assess_actionability` |
+| Is this for a business like ours? | ranking prompt → analyze prompt → `evaluate()`           |
+
 
 They do not agree. Ranking says: anything with a date behind today gets ranked
 low. Analyze says: pursue anything whose *next* edition is ahead, even with no
@@ -943,10 +969,10 @@ ranking guarantees analyze never sees it.
 and the answer travels forward.
 
 - Ranking decides *what kind of page this is* only. That is all it can tell
-  from a snippet.
+from a snippet.
 - Analyze decides *is it open* and *is it for us*, because it has read the page.
 - `assess_actionability` stops re-deciding and just enforces the dates analyze
-  extracted.
+extracted.
 
 **Why this fix.** The stage with the most evidence should own the decision.
 Ranking sees 200 characters; analyze sees the page. Asking ranking to judge
@@ -985,10 +1011,12 @@ zero.
 
 **Problem.**
 
-| Function | Lines | Model calls inside | Separate jobs |
-|---|---|---|---|
-| `research_node` | 202 | 6 | 5 |
-| `finalize_node` | 283 | 1 | 8 |
+
+| Function        | Lines | Model calls inside | Separate jobs |
+| --------------- | ----- | ------------------ | ------------- |
+| `research_node` | 202   | 6                  | 5             |
+| `finalize_node` | 283   | 1                  | 8             |
+
 
 `research_node` runs the first searches, then calls the **planner** again for a
 second round, runs those searches, assembles and de-duplicates the pool, calls
@@ -1100,10 +1128,10 @@ noise. I removed the year rule on that basis and it cost a run to find out.
 **Fix.** Two things, both cheap.
 
 1. **Replay.** Feed a saved pool of search results back through the ranking and
-   planning calls. No search cost, no fetch cost, about one cent. Already built
+  planning calls. No search cost, no fetch cost, about one cent. Already built
    (`scripts/replay.py`) and it works.
 2. **A list of known-good and known-bad pages** to score against. Started
-   (`reference/`), but the good ones are my judgement and you should mark them
+  (`reference/`), but the good ones are my judgement and you should mark them
    yourself before any number from them means anything. The bad ones — a tender
    directory, a press release, a page of past winners — need no judgement and
    can be trusted now.
@@ -1171,16 +1199,16 @@ progress — are all in the version we already have installed.
 Not everything is broken, and a rewrite should not throw these away:
 
 - Storing and matching records, so the same programme found twice becomes one
-  entry rather than two
+entry rather than two
 - The programmes registry that learns when a yearly programme reopens
 - The spending limits, which have held every single run
 - Langfuse tracing
 - The web interface and the run journey
 - The deadline check — our one verified field, and the one that has never
-  invented anything
+invented anything
 - `evaluate()`, the eligibility judgement. Its output on Aegis Graham Bell,
-  correctly refusing to fail Retearn on tracks it would not enter, is the best
-  thing the system has produced
+correctly refusing to fail Retearn on tracks it would not enter, is the best
+thing the system has produced
 
 ---
 
@@ -1188,19 +1216,21 @@ Not everything is broken, and a rewrite should not throw these away:
 
 Each step is only useful if the one before it is done.
 
-| # | Change | Touches prompts? | Needs a live run to check? |
-|---|---|---|---|
-| 1 | ~~Merge rules on the state (C4)~~ **done** | No | No |
-| 2 | ~~Saved progress (C5)~~ **done** | No | No |
-| 3 | Split the two big functions (C3) | No | No |
-| 4 | Fix the contradictions in the focus lines (A1, A2) | Yes | Replay |
-| 5 | Pass focus to link-following (A4, A5) | Yes | Replay |
-| 6 | Cut to Awards only (A3) | Yes | No |
-| 7 | Quotes for every extracted field (B1) | Yes | Live |
-| 8 | Require a date; fix what "ready" means (B2, B3) | No | Live |
-| 9 | Ask each question once and pass the answer on (C1, C2) | Yes | Live |
-| 10 | Pool check after ranking (C6) | Yes | Live |
-| 11 | Delete dead code and stories (E1, E2) | Yes | Replay |
+
+| #   | Change                                                 | Touches prompts? | Needs a live run to check? |
+| --- | ------------------------------------------------------ | ---------------- | -------------------------- |
+| 1   | ~~Merge rules on the state (C4)~~ **done**             | No               | No                         |
+| 2   | ~~Saved progress (C5)~~ **done**                       | No               | No                         |
+| 3   | Split the two big functions (C3)                       | No               | No                         |
+| 4   | Fix the contradictions in the focus lines (A1, A2)     | Yes              | Replay                     |
+| 5   | Pass focus to link-following (A4, A5)                  | Yes              | Replay                     |
+| 6   | Cut to Awards only (A3)                                | Yes              | No                         |
+| 7   | Quotes for every extracted field (B1)                  | Yes              | Live                       |
+| 8   | Require a date; fix what "ready" means (B2, B3)        | No               | Live                       |
+| 9   | Ask each question once and pass the answer on (C1, C2) | Yes              | Live                       |
+| 10  | Pool check after ranking (C6)                          | Yes              | Live                       |
+| 11  | Delete dead code and stories (E1, E2)                  | Yes              | Replay                     |
+
 
 Steps 1 to 3 change no behaviour at all — they only make the rest possible.
 Nothing after step 3 should ship without a replay showing it did not make
@@ -1218,3 +1248,4 @@ things worse.
 - [Progressive context disclosure — Thoughtworks Technology Radar](https://www.thoughtworks.com/radar/techniques/progressive-context-disclosure)
 - [LLM workflows: patterns and production architecture — Morph](https://www.morphllm.com/llm-workflows)
 - [Schema-guided extraction and validation](https://arxiv.org/abs/2604.06571)
+

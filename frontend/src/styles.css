@@ -596,3 +596,6 @@ table.tightgrid { margin-top: 6px; }
 /* Kind filter on the Results tab — reuses the focus chip styling. */
 .kind-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .kind-filter .focus-opt { padding: 5px 11px; }
+
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td { background: var(--panel); }

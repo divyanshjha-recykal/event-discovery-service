@@ -1,16 +1,20 @@
 # Retearn — Business Profile
 
-<!-- profile-template v1. Headings are a contract read by code: keep them exactly. One fact per bullet, "Label: value". Unknowns are written "Not disclosed", never left out. -->
+
 
 ## Search constraints
 
 - Entrant: a registered private company — DPIIT-recognised startup and MSME, with a commercial product in market
-- Not eligible as entrant: students, individuals, researchers, academic institutions, NGOs and non-profits, government bodies and municipalities, design studios and agencies
+- Not eligible as entrant: individuals entering in their own name (students, independent researchers), academic institutions, NGOs and non-profits, government bodies and municipalities, design studios and agencies
 - Primary market: India
 - Programmes outside India: only those that accept entrants based in India — typically technology-focused programmes where the technology matters, not the country
 - Other operations: Bhutan (deployed there; not a search market)
-- Seeking: awards, rankings and recognition for the company, its technology or its impact; speaking or exhibiting at industry events; technical venues for its engineering
+- Seeking (awards): awards, rankings and recognition for the company, its technology or its impact
+- Seeking (events): speaking or exhibiting at industry events
+- Seeking (research): technical paper conferences and workshops on the research topics in Technology, plus industry and challenge tracks at established conferences, for its engineering team's work; online or in person
 - Not seeking: grants, funding, fellowships, investment; student or individual competitions; "best out of waste", craft or design-from-waste contests; hackathons
+
+
 
 ## Search angles
 
@@ -19,6 +23,8 @@
 - Impact: environmental impact; social impact and inclusive innovation; livelihoods for informal workers; sustainable development
 - Company stage: startup and MSME innovation; deep-tech startups; made-in-India technology
 - Product category, never searched by name: reverse vending machines; Deposit Return System infrastructure
+
+
 
 ## Identity
 
@@ -30,6 +36,8 @@
 - Separation from Recykal: own legal entity and own financials, distinct from Recykal (Rapidue Technologies Pvt. Ltd.)
 - Note: do not assume Recykal's leadership applies to Retearn
 - Registrations: MSME/Udyam registered; DPIIT recognised
+
+
 
 ## Business
 
@@ -43,6 +51,8 @@
 - Customers: B2B (brands, retailers, MRFs, ULBs); B2G (municipal and state DRS programmes)
 - Platform integration: real-time traceability via CircularNet, from collection through recycling
 - One-sentence description: "Retearn builds AI-powered reverse vending machines and Deposit Return System infrastructure, deployed across India and Bhutan, running fully offline on edge AI hardware to identify, sort, and refund recyclable materials in real time."
+
+
 
 ## Technology
 
@@ -61,6 +71,10 @@
 - Fraud prevention: multi-factor verification; secure cloud telemetry; full audit trails
 - Patent granted: 1 — "A Method and System for Automated Waste Counting, Identification, Classification, and Sorting with Artificial Intelligence", Indian Patent Office, granted 17 June 2026
 - Patents published, not granted: 5
+- Research topics: information retrieval; conversational AI; vision applications; robotics; MLOps
+- Current research in house: quality metrics for recyclable plastic bottles; camera cleanliness for RVMs; anti-pinch; ConClip for foreign items; custom models for object detection; featurisation
+
+
 
 ## Operations
 
@@ -79,6 +93,8 @@
 - Collection rate Apr 2025–Mar 2026: 93% (12,36,450 QR codes issued; 11,43,772 claimed)
 - Collection-rate trend: 52% (2022–23 pilot) to 92% (2025–26)
 - Contamination at deployment sites: reduced from ~15% to <1%
+
+
 
 ## Evidence
 
@@ -103,11 +119,15 @@
 - Data protection: DPDP Act (India) alignment claimed — data minimisation, purpose limitation, controlled retention, user-data rights. A stated alignment, not a certification
 - CPCB EPR registration: Not disclosed
 
+
+
 ## Recognition history
 
 - Won: Nasscom AI Game Changers Award 2024, "for pioneering circular technology" — stated on Retearn's site; not independently verified
 - Nomination activity: internal nomination deck prepared for FY 2025–26 covering AI for Bharat and Social Impact AI categories; evidence of nominating, not of a win
 - Group recognition, not Retearn's: NASSCOM Emerge 50, Digital India Awards (Kedarnath DRS), Fortune Change the World — all Recykal
+
+
 
 ## Known exclusions
 
@@ -116,7 +136,10 @@
 - AI is object-centric: no gender, caste, religion, ethnicity or facial-recognition data used in decisions
 - Prior disqualifications from any award or programme: none on record
 
+
+
 ## Reading notes
 
 - A field marked Not disclosed or Unknown is unclear, not a negative
 - Figures in lakh and crore are as reported internally; do not round or convert unless a criterion requires it
+

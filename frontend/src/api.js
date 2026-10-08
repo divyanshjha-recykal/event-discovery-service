@@ -50,7 +50,7 @@ export const FOCUS = [
   ['any', 'Everything', 'Awards, events and technical venues together.'],
   ['award', 'Awards', 'Prizes, rankings and honours we could be entered for.'],
   ['event', 'Events', 'Conferences, summits, forums and expos.'],
-  ['research', 'Research', 'Conference papers, workshops, demo tracks and challenges.'],
+  ['research', 'Research', 'Peer-reviewed papers, industry tracks, workshops and challenge tracks at established conferences.'],
 ]
 
 /** What kind of opportunity a stored record is. */

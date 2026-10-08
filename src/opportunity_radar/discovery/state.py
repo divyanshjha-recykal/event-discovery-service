@@ -51,6 +51,14 @@ class SearchHit:
     key_dates: str = ""
     #: The page's own sentence on whether entry is open.
     entry_status: str = ""
+    #: The scholarly body or publisher behind a venue, as the page names it.
+    sponsor: str = ""
+    #: The provider's label: award, event, research, other, or "unrecognised".
+    opportunity_type: str = ""
+    #: The provider's summary exactly as returned, and whether it parsed:
+    #: "ok", "invalid" (not a JSON object) or "missing"; empty for providers without one.
+    summary_raw: str = ""
+    summary_status: str = ""
 
 
 @dataclass(frozen=True)

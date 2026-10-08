@@ -86,22 +86,47 @@ function PlanBody({ e }) {
 
 function SearchBody({ e, followed = [] }) {
   const rows = e.results || []
+  const [open, setOpen] = useState(null)
+  const types = Object.entries(e.types || {})
   return (
     <>
       {e.rationale && <p className="why small tight">{e.rationale}</p>}
       {e.detail && <p className="err small tight">{e.detail}</p>}
+      {!!types.length && (
+        <p className="small muted tight">
+          Exa type labels: {types.map(([t, n]) => `${t} ${n}`).join(' · ')}
+          {e.on_type != null && ` — ${e.on_type} of ${rows.length} match this run's type`}
+          {!!e.unreadable_summaries && <span className="err"> · {e.unreadable_summaries} summary not readable</span>}
+        </p>
+      )}
       {!rows.length && <p className="muted small tight">No results.</p>}
       {!!rows.length && (
         <table className="grid">
-          <thead><tr><th style={{ width: '30%' }}>Title</th><th style={{ width: 210 }}>Link</th><th>Snippet</th></tr></thead>
+          <thead><tr><th style={{ width: '28%' }}>Title</th><th style={{ width: 200 }}>Link</th><th style={{ width: 90 }}>Type</th><th>Snippet</th></tr></thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.url}>
+            {rows.map((r) => [
+              <tr key={r.url} className="clickable" onClick={() => setOpen(open === r.url ? null : r.url)}>
                 <td>{r.title}</td>
                 <td><Url href={r.url}>{r.url.replace(/^https?:\/\//, '').slice(0, 42)}</Url></td>
+                <td>{r.opportunity_type ? <span className="tag muted">{r.opportunity_type}</span> : <span className="muted small">—</span>}</td>
                 <td className="why clamp">{r.snippet}</td>
-              </tr>
-            ))}
+              </tr>,
+              open === r.url && (
+                <tr key={`${r.url}-detail`}>
+                  <td colSpan={4}>
+                    {r.ranker_view
+                      ? <><p className="small muted tight">What the ranker read for this result</p><pre className="mono small scraped">{r.ranker_view}</pre></>
+                      : <p className="small muted tight">Not recorded for this run.</p>}
+                    {r.summary_raw && (
+                      <details className="raw">
+                        <summary className="small muted">Exa summary as returned ({r.summary_status})</summary>
+                        <pre className="mono small scraped">{r.summary_raw}</pre>
+                      </details>
+                    )}
+                  </td>
+                </tr>
+              ),
+            ])}
           </tbody>
         </table>
       )}
@@ -450,7 +475,11 @@ function headline(e) {
       if (e.outcome === 'failed') return 'planning failed'
       if (e.outcome === 'short') return `${(e.queries || []).length} of ${e.asked} queries`
       return plural((e.queries || []).length, 'query', 'queries')
-    case 'search': return `${e.query} · ${plural((e.results || []).length, 'result', 'results')}`
+    case 'search': {
+      const n = (e.results || []).length
+      const fit = e.on_type != null ? ` · ${e.on_type} of ${n} on-type` : ''
+      return `${e.query} · ${plural(n, 'result', 'results')}${fit}`
+    }
     case 'shortlist': {
       if (e.outcome !== 'ok') return 'selection failed'
       const ranked = e.picked || []

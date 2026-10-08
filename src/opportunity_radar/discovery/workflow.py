@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from dataclasses import replace
+from collections import Counter
+from dataclasses import asdict, replace
 from urllib.parse import urlsplit
 from datetime import date
 from functools import lru_cache, partial
@@ -118,9 +119,9 @@ FOCUS_NOUN = {
     "award": "awards, prizes and rankings this business could be entered for",
     "event": "events this business could speak at, exhibit at or take part in",
     "research": (
-        "technical venues that take submissions — conference papers, "
-        "workshops, industry and applied tracks, demo sessions and "
-        "technical challenges"
+        "peer-reviewed technical venues — industry and applied tracks, paper "
+        "and workshop calls, and challenge tracks at established conferences "
+        "and journals"
     ),
 }
 
@@ -144,17 +145,22 @@ FOCUS_HINT = {
     ),
     "event": (
         "THIS RUN WANTS EVENTS. Conferences, summits, forums and expos this "
-        "business could speak at, exhibit at or take part in."
+        "business could participate at, exhibit at or take part in to demonstrate it's products and/or technology."
     ),
     "research": (
-        "THIS RUN WANTS TECHNICAL VENUES THAT TAKE SUBMISSIONS — conference "
-        "papers, workshops, industry and applied tracks, demo sessions and "
-        "technical challenges or benchmarks. These are organised by technical "
-        "subfield, not by industry: computer vision, machine learning, "
-        "robotics, signal processing, data mining, human-computer interaction. "
-        "Search the engineering in the profile's own technology section — the "
-        "methods, models, sensing, datasets, measurements and patents — and "
-        "name the subfield it belongs to. Never name the product."
+        "THIS RUN WANTS PEER-REVIEWED TECHNICAL VENUES WHERE A COMPANY'S "
+        "ENGINEERING TEAM PUBLISHES, PRESENTS OR COMPETES — industry, applied "
+        "and application tracks, paper and workshop calls, and challenge or "
+        "competition tracks hosted by established international conferences "
+        "and journals. Prefer venues run or sponsored by recognised scholarly "
+        "bodies, and workshops held at those conferences, including workshops "
+        "on AI for sustainability or the environment. Take the fields from the "
+        "profile's Technology section — its research topics and current "
+        "research first, then its methods, models, sensing and datasets — and "
+        "name the subfield each belongs to. Not wanted: "
+        "standalone hackathons, student or individual competitions, developer "
+        "challenges, and conference series that run many unrelated events. "
+        "Never name the product."
     ),
 }
 
@@ -678,7 +684,7 @@ SEARCH ANGLES:
 {_angles(runtime)}
 
 ## Rules
-- Opening searches: keep them broad — a field and a kind of recognition.
+- Opening searches: keep them broad — a field and a kind of opportunity.
 - Each query takes a different angle.
 - Use SEARCH ANGLES as directions, not phrases: rephrase them and reach
   adjacent fields.
@@ -846,12 +852,22 @@ def _date_line(hit, today: str) -> str:
     return " | ".join(parts)
 
 
+def _hit_record(hit, position: int, today: str) -> dict:
+    """Everything the search returned for one result, and the text the ranker reads for it."""
+    # `snippet` shows what ranking reads; the provider's short extract stays in `extract`.
+    return asdict(hit) | {
+        "position": position, "extract": hit.snippet, "snippet": hit.content or hit.snippet,
+        "ranker_view": "\n".join([hit.title, *_listing_lines(hit, today)]),
+    }
+
+
 def _facts_line(hit) -> str:
     """Who runs it and who may enter, as the provider read them off the page."""
     return " | ".join(
         f"{label}: {value}"
         for label, value in (
             ("organiser", hit.organiser),
+            ("sponsor", hit.sponsor),
             ("open to", hit.who_can_enter),
             ("country", hit.country_restriction),
         )
@@ -860,8 +876,12 @@ def _facts_line(hit) -> str:
 
 
 def _listing_entry(index: int, hit, today: str) -> str:
+    return "\n".join([f"[{index}] {hit.title}", *_listing_lines(hit, today)])
+
+
+def _listing_lines(hit, today: str) -> list[str]:
+    """Every line the ranker reads for one result, after its title."""
     lines = [
-        f"[{index}] {hit.title}",
         f"     {hit.url}",
         f"     Query: {hit.query}" + (f" · search score {hit.score:.2f}" if hit.score else ""),
         f"     {_date_line(hit, today)}",
@@ -869,7 +889,7 @@ def _listing_entry(index: int, hit, today: str) -> str:
     if facts := _facts_line(hit):
         lines.append(f"     {facts}")
     lines.append(f"     {(hit.content or hit.snippet)[:SEARCH_CONTENT_CHARS]}")
-    return "\n".join(lines)
+    return lines
 
 
 def _programme_key(hit) -> str:
@@ -914,7 +934,7 @@ Fetch only results that meet all three:
    closed, dates not behind today.
 Leave out any result that fails a condition. Order the rest:
 1. An entry deadline within the next 14 days.
-2. The kind of opportunity CONSTRAINTS list first under "Seeking", then the next.
+2. The kind of opportunity CONSTRAINTS list first among its Seeking lines, then the next.
 3. Within a kind, confidence that all three conditions hold.
 
 Each result may show dates read from the page, with the sentence they came
@@ -1015,6 +1035,10 @@ async def search_node(
     seen_queries = {hit.query for hit in pool}
     found_now: list[SearchHit] = []
     provider, search = search_provider(runtime.search_provider)
+    # Research runs let Exa pick passages for each query rather than for award-style entry details.
+    query_guided = provider == "exa" and runtime.focus == "research"
+    if query_guided:
+        search = partial(search, query_guided_highlights=True)
     held: dict[str, str] = {}
     programmes: dict[str, str] = {}
     for hit in pool:
@@ -1040,13 +1064,13 @@ async def search_node(
                     for hit in found if hit.url
                 ]
                 kept = []
-                for hit in found:
+                for position, hit in enumerate(found, 1):
                     key = content_key(hit.content, EXTRACT_KEY_CHARS)
                     if key and held.get(key, hit.url) != hit.url:
                         await _record(
                             runtime, "dedupe", node="search", url=hit.url,
                             outcome="dropped", title=hit.title,
-                            duplicate_of=held[key],
+                            duplicate_of=held[key], hit=_hit_record(hit, position, today.isoformat()),
                         )
                         continue
                     if key:
@@ -1056,33 +1080,29 @@ async def search_node(
                         await _record(
                             runtime, "dedupe", node="search", url=hit.url,
                             outcome="dropped", title=hit.title,
-                            duplicate_of=programmes[pkey],
+                            duplicate_of=programmes[pkey], hit=_hit_record(hit, position, today.isoformat()),
                         )
                         continue
                     if pkey:
                         programmes.setdefault(pkey, hit.url)
-                    kept.append(hit)
-                found = kept
+                    kept.append((position, hit))
+                found = [hit for _, hit in kept]
                 found_now.extend(found)
+                unreadable = sum(1 for hit in found if hit.summary_status == "invalid")
+                if unreadable:
+                    runtime.warnings.append(
+                        f"search {planned.query!r}: {unreadable} summary(ies) were not valid JSON"
+                    )
+                types = Counter(hit.opportunity_type for hit in found if hit.opportunity_type)
                 await _record(
                     runtime, "search", node="search", query=planned.query,
                     outcome="ok" if found else "empty", provider=provider,
-                    round=round_label, geography=planned.geography,
-                    rationale=planned.rationale,
-                    results=[
-                        # `content` not `snippet`: this is what the ranking call
-                        # actually reads, and the journey was showing the
-                        # shorter one, so what you could inspect was not what it
-                        # saw.
-                        {
-                            "title": i.title,
-                            "url": i.url,
-                            "snippet": i.content or i.snippet,
-                            "entry_deadline": i.entry_deadline,
-                            "event_date": i.event_date,
-                        }
-                        for i in found
-                    ],
+                    round=round_label, intent=planned.intent, geography=planned.geography,
+                    highlights="query" if query_guided else "fixed",
+                    rationale=planned.rationale, focus=runtime.focus,
+                    types=dict(types), unreadable_summaries=unreadable,
+                    on_type=types.get(runtime.focus, 0) if runtime.focus != "any" else None,
+                    results=[_hit_record(hit, position, today.isoformat()) for position, hit in kept],
                 )
             except Exception as exc:  # noqa: BLE001
                 runtime.failures.append(

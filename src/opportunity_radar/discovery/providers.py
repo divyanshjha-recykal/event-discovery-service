@@ -180,8 +180,13 @@ _EXA_SUMMARY_SCHEMA = {
         "date_quote": {"type": "string", "description": "The sentence stating the deadline or event date, copied verbatim; empty if none."},
         "key_dates": {"type": "string", "description": "Every date the page gives, each with its label, e.g. 'Nominations close: 25 Sep 2026; Jury: November 2026'; empty if none."},
         "entry_status": {"type": "string", "description": "The sentence saying whether entries are open, closed or opening soon, copied verbatim; empty if none."},
+        "opportunity_type": {"type": "string", "description": "Exactly one of: award (recognition an organisation is entered or nominated for), event (expo, summit or conference to exhibit or speak at), research (call for papers, industry or applied track, workshop, or challenge track at a peer-reviewed conference or journal), other (standalone hackathons, student competitions, news, directories, grants, or anything else)."},
+        "sponsor": {"type": "string", "description": "The scholarly body or publisher behind the venue (e.g. a professional society or proceedings publisher), as named on the page; empty if none."},
     },
 }
+
+OPPORTUNITY_TYPES = frozenset({"award", "event", "research", "other"})
+SUMMARY_RAW_CHARS = 4_000
 
 _ISO_PREFIX = re.compile(r"^\s*(\d{4}-\d{2}-\d{2})")
 
@@ -197,20 +202,30 @@ def _strict_date(value: object) -> str:
         return ""
 
 
-def _exa_facts(summary: object) -> dict[str, str]:
-    """The structured summary as strings; empty when Exa returned none or prose."""
+def _exa_facts(summary: object) -> tuple[dict[str, str], str]:
+    """The structured summary as strings, and whether it parsed: ok, invalid or missing."""
+    if not summary:
+        return {}, "missing"
     if isinstance(summary, str):
         try:
             summary = json.loads(summary)
         except json.JSONDecodeError:
-            return {}
+            return {}, "invalid"
     if not isinstance(summary, Mapping):
-        return {}
-    return {key: str(summary.get(key) or "").strip() for key in _EXA_SUMMARY_SCHEMA["properties"]}
+        return {}, "invalid"
+    facts = {key: str(summary.get(key) or "").strip() for key in _EXA_SUMMARY_SCHEMA["properties"]}
+    return facts, "ok"
+
+
+def _opportunity_type(value: str) -> str:
+    """The provider's label if it is one we defined; anything else is kept visible as unrecognised."""
+    label = value.strip().lower()
+    return label if label in OPPORTUNITY_TYPES else "unrecognised"
 
 
 async def tool_exa_search(
-    query: str, *, max_results: int = 7, dry_run: bool = False
+    query: str, *, max_results: int = 7, dry_run: bool = False,
+    query_guided_highlights: bool = False,
 ) -> list[SearchHit]:
     if dry_run:
         return [
@@ -225,6 +240,8 @@ async def tool_exa_search(
                 entry_deadline="2027-11-30",
                 who_can_enter="Companies registered and operating in India",
                 date_quote="The last date for submissions is 30 November 2027.",
+                opportunity_type="award",
+                summary_status="ok",
             )
         ]
 
@@ -234,7 +251,9 @@ async def tool_exa_search(
         "numResults": max_results,
         "excludeDomains": list(EXCLUDED_DOMAINS),
         "contents": {
-            "highlights": {"query": _EXA_HIGHLIGHTS_QUERY, "maxCharacters": SEARCH_CONTENT_CHARS},
+            # Query-guided is Exa's documented default: passages relevant to the search query itself.
+            "highlights": True if query_guided_highlights
+            else {"query": _EXA_HIGHLIGHTS_QUERY, "maxCharacters": SEARCH_CONTENT_CHARS},
             "summary": {"query": _EXA_SUMMARY_QUERY, "schema": _EXA_SUMMARY_SCHEMA},
         },
     }
@@ -255,7 +274,8 @@ async def tool_exa_search(
     for item in response.json().get("results") or []:
         if not item.get("url"):
             continue
-        facts = _exa_facts(item.get("summary"))
+        raw = item.get("summary")
+        facts, status = _exa_facts(raw)
         deadline = _strict_date(facts.get("entry_deadline"))
         event = _strict_date(facts.get("event_date"))
         extract = " ... ".join(str(h) for h in item.get("highlights") or [])
@@ -276,6 +296,10 @@ async def tool_exa_search(
                 date_quote=facts.get("date_quote", "") if deadline or event else "",
                 key_dates=facts.get("key_dates", ""),
                 entry_status=facts.get("entry_status", ""),
+                sponsor=facts.get("sponsor", ""),
+                opportunity_type=_opportunity_type(facts.get("opportunity_type", "")),
+                summary_raw=(raw if isinstance(raw, str) else json.dumps(raw or ""))[:SUMMARY_RAW_CHARS],
+                summary_status=status,
             )
         )
     return hits
