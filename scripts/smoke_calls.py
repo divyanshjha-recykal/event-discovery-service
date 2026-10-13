@@ -27,6 +27,7 @@ from opportunity_radar.discovery.workflow import (
     _AnalysisModel,
     _LinkChoiceModel,
     _QueryPlanModel,
+    _SearchStepModel,
     _ShortlistModel,
     _structured,
 )
@@ -43,6 +44,10 @@ CALLS = [
      "Return a search plan as JSON matching the supplied schema.",
      f"Today is {TODAY}. Write 1 web search to find awards a recycling "
      "company in India could enter."),
+    ("opportunity_search_step", _SearchStepModel, TOKENS_PLAN, False,
+     "Return a search plan as JSON matching the supplied schema.",
+     f"Today is {TODAY}. You searched: 1. recycling awards in India (3 results, "
+     "all past editions). Assess it, list gaps, and write at most one next search."),
     ("search_shortlist", _ShortlistModel, TOKENS_SHORTLIST, False,
      "Rank search results. Return JSON matching the supplied schema.",
      f"Today is {TODAY}. Rank these:\n[0] National Recycling Awards — "

@@ -76,6 +76,8 @@ def canonicalize_url(url: str) -> str:
 
 
 _URL = re.compile(r"https?://\S+")
+#: Links offered to the picker per page; menus make first pages longer.
+MAX_LINK_CANDIDATES = 60
 #: A seed page shorter than this is too thin to call a duplicate.
 SEED_KEY_CHARS = 500
 
@@ -95,6 +97,9 @@ def _candidate_links(page: EvidencePage, seed_url: str) -> list[tuple[str, str]]
     labelled: dict[str, str] = {url: url for url in page.links}
     for label, url in _MARKDOWN_LINK.findall(page.markdown):
         labelled[url] = label
+    for url, label in page.anchors:
+        if labelled.get(url, url) == url:
+            labelled[url] = label or url
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
     for url, label in labelled.items():
@@ -155,7 +160,7 @@ async def resolve_evidence_bundle(
         runtime.budget.consume("scrape")
         try:
             page = await tool_firecrawl_fetch(
-                url, depth=depth, dry_run=runtime.dry_run
+                url, depth=depth, dry_run=runtime.dry_run, page_links=depth == 0
             )
             page = replace(page, url=canonicalize_url(page.url))
         except Exception as exc:  # noqa: BLE001
@@ -181,6 +186,7 @@ async def resolve_evidence_bundle(
                 fallback = await tool_firecrawl_fetch(
                     url,
                     depth=depth,
+                    page_links=depth == 0,
                     dry_run=runtime.dry_run,
                     only_main_content=False,
                     wait_for=1_500,
@@ -203,6 +209,7 @@ async def resolve_evidence_bundle(
             page_title=page.title,
             page_description=page.description,
             links_found=len(page.links),
+            anchors_found=len(page.anchors),
             # The fetched text itself, so what the model read is inspectable
             # rather than only its character count.
             preview=page.markdown[:SCRAPE_PREVIEW_CHARS],
@@ -234,7 +241,7 @@ async def resolve_evidence_bundle(
         # beat a keyword guess at which link matters.
         followed: list[str] = []
         try:
-            followed = await choose_links(page, candidates[:40])
+            followed = await choose_links(page, candidates[:MAX_LINK_CANDIDATES])
         except Exception as exc:  # noqa: BLE001
             await record_event(
                 "select_links", node="fetch", url=page.url,

@@ -79,7 +79,9 @@ from .state import (
 # the model thinks until the budget is gone and returns nothing. That is what
 # killed the second planning wave on deepseek-v4.1-flash — 364 seconds of
 # reasoning against a 3,000-token ceiling, then an empty string.
-TOKENS_PICK_LINKS = 4_000      # 1k reserved for thinking, rest for <=4 ints + a sentence
+TOKENS_PICK_LINKS = 4_000      # 1k reserved for thinking, rest for the answer
+# Opening text the link picker reads before choosing.
+PICK_PAGE_CHARS = 3_000
 # The answer is ~1,300 tokens; the rest is headroom because the reasoning cap is advisory.
 TOKENS_SHORTLIST = 24_000
 # Wave two reads 24 result lines plus the whole profile before writing, so it
@@ -180,18 +182,55 @@ def _focus_line(runtime: WorkflowRuntime) -> str:
 # language up to 400 characters, with longer queries doing BETTER on the
 # `advanced` depth we use. So the rule was capping queries at four words on the
 # one setting that rewards detail, and turning every search into a topic lookup.
-_QUERY_MECHANICS = """Query rules:
-- Natural language stating what to find and who enters it. Not keywords.
-    topic:  robotics awards Germany
-    intent: robotics awards in Germany that companies can enter
+_QUERY_RULES = """Query rules:
+- Write each query as a description of the page you want to find: what kind of page it is,
+  what it covers, and who it is for. The search engine matches pages to descriptions, not keywords.
 - One angle per query, about a dozen words. Never stack several ideas.
-- The entrant is always this business, as CONSTRAINTS define it.
-- Name the primary market from CONSTRAINTS, or ask for programmes open to
-  entrants based there.
-- "open for entries", "accepting nominations" and "call for entries" help.
+- The participant is always this business, as CONSTRAINTS define it.
+- {market}
 - No year; state timing in words. Exception: calls for papers.
 - Never name the product category from SEARCH ANGLES.
-- No quotation marks. Do not search for a programme the profile already names."""
+- No quotation marks. Do not search for a programme the profile already names.
+
+Examples of the shape to follow; their fields and places are deliberately unrelated to this business:
+{examples}"""
+
+_MARKET_RULE = {
+    "research": (
+        "Do not name a country: peer-reviewed venues are international, and the "
+        "subfield decides fit."
+    ),
+}
+_DEFAULT_MARKET_RULE = (
+    "Name the primary market from CONSTRAINTS, or ask for programmes open to "
+    "entrants based there."
+)
+_QUERY_EXAMPLES = {
+    "award": (
+        '"nominations page for a national award recognising fintech startups in '
+        'Brazil" names the page, the field, the entrant and the market.'
+    ),
+    "event": (
+        '"exhibitor registration page for an agritech trade show in Indonesia" '
+        "names the page, the field, how a company takes part, and where."
+    ),
+    "research": (
+        '"call for papers page of an international speech recognition conference '
+        'with an industry track" names the page, the field, and that companies can submit.'
+    ),
+}
+
+
+def _query_rules(runtime: WorkflowRuntime) -> str:
+    """The query rules for this run's type: its market rule and its example."""
+    focus = runtime.focus or "any"
+    examples = (
+        [_QUERY_EXAMPLES[focus]] if focus in _QUERY_EXAMPLES else list(_QUERY_EXAMPLES.values())
+    )
+    return _QUERY_RULES.format(
+        market=_MARKET_RULE.get(focus, _DEFAULT_MARKET_RULE),
+        examples="\n".join(f"- {example}" for example in examples),
+    )
 
 # Per page, not per bundle. A single positional slice across the whole bundle
 # meant a long seed page consumed the entire window and the L1 pages we paid to
@@ -227,7 +266,7 @@ HEAVY_CALLS = frozenset({
     "search_shortlist",
     "opportunity_candidate_analysis",
     "opportunity_query_plan",
-    "opportunity_query_plan_followup",
+    "opportunity_search_step",
 })
 
 
@@ -248,6 +287,16 @@ class _QueryPlanModel(BaseModel):
     # Count is asked for in the prompt, not pinned in the schema: planning now
     # runs in two waves and the second is sized by what the first found.
     queries: list[_PlannedQueryModel] = Field(min_length=1, max_length=6)
+
+
+class _SearchStepModel(BaseModel):
+    """Thought first (assessment, gaps), then the action: one query, or none to stop."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    assessment: str = Field(max_length=1500)
+    gaps: list[Annotated[str, Field(max_length=200)]] = Field(max_length=5)
+    next_queries: list[_PlannedQueryModel] = Field(max_length=1)
 
 
 # Bounded so a MAXIMAL conforming answer still fits under TOKENS_ANALYZE.
@@ -344,8 +393,12 @@ class _ShortlistModel(BaseModel):
 
 
 class _LinkChoiceModel(BaseModel):
+    """What the page states and lacks, then the links that fill the gap (or none)."""
+
     model_config = ConfigDict(extra="forbid")
 
+    covered: str = Field(max_length=400)
+    missing: str = Field(max_length=400)
     indexes: list[int] = Field(max_length=4)
     reason: str = Field(max_length=300)
 
@@ -688,7 +741,7 @@ SEARCH ANGLES:
 - Each query takes a different angle.
 - Use SEARCH ANGLES as directions, not phrases: rephrase them and reach
   adjacent fields.
-{_QUERY_MECHANICS}
+{_query_rules(runtime)}
 
 BUSINESS:
 {memory}
@@ -736,36 +789,51 @@ BUSINESS:
     return {"memory": memory, "planned_queries": planned}
 
 
-async def _plan_followup(
+def _search_observation(
+    ran: list[PlannedQuery], hits: list, dropped: dict[str, int], today: str
+) -> str:
+    """What each search returned, as the next search step sees it."""
+    by_query: dict[str, list] = {}
+    for hit in hits:
+        by_query.setdefault(hit.query, []).append(hit)
+    blocks = []
+    for number, planned in enumerate(ran, 1):
+        rows = by_query.get(planned.query, [])
+        types = Counter(hit.opportunity_type or "unlabelled" for hit in rows)
+        past = sum(
+            1 for hit in rows
+            if (hit.entry_deadline or hit.event_date or "9999") < today
+        )
+        lines = [
+            f"{number}. {planned.query}",
+            f"   {len(rows)} results · types: "
+            + (", ".join(f"{t} {n}" for t, n in types.most_common()) or "none")
+            + f" · dates already past: {past} · duplicates dropped: {dropped.get(planned.query, 0)}",
+        ]
+        for hit in rows[:8]:
+            when = hit.entry_deadline or hit.event_date or "no date"
+            lines.append(
+                f"   - {hit.title[:80]} | {hit.opportunity_type or 'unlabelled'} | "
+                f"{hit.organiser or 'organiser not stated'} | {when}"
+                + (f" | {hit.country_restriction}" if hit.country_restriction else "")
+            )
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks) or "(no searches yet)"
+
+
+async def _search_step(
     runtime: WorkflowRuntime,
-    already_run: list[PlannedQuery],
+    ran: list[PlannedQuery],
     hits: list,
+    dropped: dict[str, int],
     memory: str,
     today: date,
-    want: int,
-) -> list[PlannedQuery]:
-    """The second planning wave, written with the first wave's results visible.
-
-    The whole point of the split. Planning used to write every query before
-    seeing a single result, so it could not know that a wording returned
-    directories, or that a field was already saturated. Every rule this prompt
-    does not contain is one the model can now simply observe.
-    """
-    listing = "\n".join(
-        f"  {hit.url.split('/')[2] if '://' in hit.url else hit.url}  —  "
-        f"{hit.title[:90]}"
-        for hit in hits[:24]
-    ) or "  (nothing came back)"
-    ran = "\n".join(f"  {index}. {item.query}" for index, item in enumerate(already_run, 1))
-
-    # The objective is restated here deliberately. Without it this prompt said
-    # only "reach ground these missed", and the model read that as topics
-    # missed rather than programmes missed — it went looking for policy
-    # frameworks, industry standards and pilot metrics, none of which anyone can
-    # enter. Every prompt that writes queries has to say what it is hunting.
+    remaining: int,
+):
+    """One ReAct step: assess every search so far, then run one more or stop."""
     prompt = f"""## Objective
-Today is {today.isoformat()}. Write exactly {want} more web searches for
-programmes this business can enter that the searches below missed.
+Today is {today.isoformat()}. You are searching for {_focus_noun(runtime)}.
+You can run up to {remaining} more searches.
 {_focus_line(runtime)}
 CONSTRAINTS:
 {_constraints(runtime)}
@@ -773,37 +841,28 @@ CONSTRAINTS:
 SEARCH ANGLES:
 {_angles(runtime)}
 
-You searched:
-{ran}
+## What your searches returned
+{_search_observation(ran, hits, dropped, today.isoformat())}
 
-These came back:
-{listing}
-
-## Rules
-- Take angles the searches above did not: another field, kind of body, kind of
-  recognition, or technology.
-- If the results above are dominated by one kind of page, one corner of the
-  field, or programmes this business cannot enter, go elsewhere.
-- Use SEARCH ANGLES as directions, not phrases.
-- Every query looks for a programme this business can enter — never reports,
-  policy, standards or background reading.
-- Do not repeat a search above.
-{_QUERY_MECHANICS}
+## Think, then act
+1. Assess each search: did it return the right kind of page for this run, open or
+   upcoming, that this business can take part in? If not, name the cause: wrong
+   kind of page, wrong field, too broad or too narrow, past editions, wrong
+   market, or off type.
+2. List what this business should see that the results do not yet cover.
+3. Write at most one next search that addresses the most important gap; its
+   rationale names that gap. Do not repeat a search above. Write none if the
+   results already cover what this business should see.
+{_query_rules(runtime)}
 
 BUSINESS:
 {memory}
 """
-    items = await _ask_for_queries(
-        runtime, "opportunity_query_plan_followup", prompt, want
+    runtime.budget.consume("plan")
+    return await _structured(
+        runtime, _SearchStepModel, "opportunity_search_step", _PLAN_SYSTEM, prompt,
+        max_tokens=TOKENS_PLAN,
     )
-    seen = {item.query.casefold() for item in already_run}
-    return [
-        PlannedQuery(
-            item.query, item.intent, item.geography, item.target_year, item.rationale
-        )
-        for item in items
-        if item.query.casefold() not in seen
-    ][:want]
 
 
 _SHORTLIST_SYSTEM = (
@@ -988,16 +1047,21 @@ def _link_chooser(runtime: WorkflowRuntime, today: date):
 {page.url}
 {page.title}
 
-Below are links on the same site. Pick at most {runtime.limits.max_links_per_page} that most
-likely state entry eligibility, who can enter, entry requirements, categories,
-fees, or the entry deadline. A brochure, entry pack, guidelines or rules
-document counts — those are often where the conditions actually live, and a PDF
-is readable. Prefer a specific entry, eligibility or categories
-page over a general one. Skip winners, past editions, news, sponsors, contact,
-login and social pages. Return an empty list if none are worth fetching.
+THE PAGE (opening text):
+{page.markdown[:PICK_PAGE_CHARS]}
 
-LINKS:
+LINKS on the same site:
 {listing}
+
+1. `covered`: what this page already states about the opportunity: its dates or
+   deadline, who can take part, how to apply or submit, and its scope or categories.
+2. `missing`: which of those it does not state.
+3. `indexes`: at most {runtime.limits.max_links_per_page} links most likely to state what is missing.
+   A brochure, rules, guidelines or call-for-papers document counts, and a PDF is
+   readable. Skip winners, past editions, news, sponsors, contact, login and
+   social pages. Return an empty list if nothing is missing or no link is likely
+   to supply it.
+4. `reason`: why these links, or why none.
 """
         runtime.budget.consume("select_links")
         parsed = await _structured(
@@ -1016,6 +1080,7 @@ LINKS:
         await _record(
             runtime, "select_links", node="fetch", url=page.url,
             outcome="ok", picked=picked, reason=parsed.reason,
+            covered=parsed.covered, missing=parsed.missing,
             considered=len(candidates),
         )
         return picked
@@ -1047,6 +1112,8 @@ async def search_node(
         if pkey := _programme_key(hit):
             programmes.setdefault(pkey, hit.url)
 
+    dropped: Counter = Counter()
+
     async def run_queries(planned_list: list[PlannedQuery], round_label: str) -> None:
         for planned in planned_list:
             if planned.query in seen_queries:
@@ -1072,6 +1139,7 @@ async def search_node(
                             outcome="dropped", title=hit.title,
                             duplicate_of=held[key], hit=_hit_record(hit, position, today.isoformat()),
                         )
+                        dropped[planned.query] += 1
                         continue
                     if key:
                         held.setdefault(key, hit.url)
@@ -1082,6 +1150,7 @@ async def search_node(
                             outcome="dropped", title=hit.title,
                             duplicate_of=programmes[pkey], hit=_hit_record(hit, position, today.isoformat()),
                         )
+                        dropped[planned.query] += 1
                         continue
                     if pkey:
                         programmes.setdefault(pkey, hit.url)
@@ -1116,45 +1185,54 @@ async def search_node(
 
     await run_queries(state["planned_queries"], "broad")
 
-    # Second wave, written with the first wave's results in front of it. Only on
-    # the first pass: a re-plan already has the whole pool to look at, and the
-    # queries it was given were written after seeing it.
+    # ReAct after the opening searches: observe what came back, assess, then one
+    # more search or stop. First pass only; a re-plan writes its whole allowance at once.
     added_queries: list[PlannedQuery] = []
     if (
         found_now
         and not runtime.dry_run
         and not state["supplied_queries"]
         and state["replan_count"] == 0
-        and runtime.budget.refusal("plan") is None
     ):
-        try:
-            followup = await _plan_followup(
-                runtime, list(state["planned_queries"]), pool + found_now,
-                state["memory"], today, PLAN_WAVE_TWO,
-            )
+        ran = list(state["planned_queries"])
+        for step in range(1, PLAN_WAVE_TWO + 1):
+            if runtime.budget.refusal("plan") or runtime.budget.refusal("search"):
+                break
+            try:
+                decision = await _search_step(
+                    runtime, ran, pool + found_now, dropped, state["memory"],
+                    today, PLAN_WAVE_TWO - step + 1,
+                )
+            except Exception as exc:  # noqa: BLE001 — the opening searches still stand
+                detail = f"{type(exc).__name__}: {exc}"[:300]
+                runtime.warnings.append(f"search step {step} failed: {detail}")
+                await _record(runtime, "plan", node="plan", outcome="failed", detail=detail)
+                break
+            seen = {item.query.casefold() for item in ran}
+            proposed = [
+                PlannedQuery(item.query, item.intent, item.geography, item.target_year, item.rationale)
+                for item in decision.next_queries
+            ]
+            fresh = [item for item in proposed if item.query.casefold() not in seen]
             await _record(
                 runtime, "plan", node="plan",
-                outcome="short" if len(followup) < PLAN_WAVE_TWO else "ok",
-                asked=PLAN_WAVE_TWO,
-                detail=f"second wave, written after seeing {len(found_now)} results",
+                outcome="ok" if fresh else ("repeat" if proposed else "stop"),
+                asked=1, step=step, detail=f"search step {step} of up to {PLAN_WAVE_TWO}",
+                assessment=decision.assessment, gaps=list(decision.gaps),
                 queries=[
                     {
                         "query": item.query, "intent": item.intent,
-                        "geography": item.geography,
-                        "target_year": item.target_year,
+                        "geography": item.geography, "target_year": item.target_year,
                         "rationale": item.rationale,
                     }
-                    for item in followup
+                    for item in proposed
                 ],
             )
-            added_queries.extend(followup)
-            await run_queries(followup, "informed")
-        except Exception as exc:  # noqa: BLE001 — wave one still stands on its own
-            detail = f"{type(exc).__name__}: {exc}"[:300]
-            runtime.warnings.append(f"second planning wave failed: {detail}")
-            await _record(
-                runtime, "plan", node="plan", outcome="failed", detail=detail,
-            )
+            if not fresh:
+                break
+            ran.extend(fresh)
+            added_queries.extend(fresh)
+            await run_queries(fresh, "informed")
 
     return {
         "search_hits": [hit for hit in found_now if hit.url not in known_urls],

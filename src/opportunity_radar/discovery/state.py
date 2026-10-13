@@ -71,6 +71,8 @@ class EvidencePage:
     status_code: int | None = None
     content_type: str = ""
     links: tuple[str, ...] = ()
+    #: Every (url, link text) in the page's raw HTML, menus included; first pages only.
+    anchors: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

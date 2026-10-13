@@ -63,13 +63,19 @@ const Raw = ({ e }) => (
 function PlanBody({ e }) {
   return (
     <>
-      {e.outcome === 'fallback' && (
-        <p className="err small tight">
-          The planner call failed; the deterministic fallback plan ran instead.
-          {e.detail ? ` ${e.detail}` : ''}
-        </p>
+      {e.assessment && (
+        <div className="why-block">
+          <span className="why-label">Assessment of the searches so far</span>
+          <div>{e.assessment}</div>
+        </div>
       )}
-      <table className="grid">
+      {!!(e.gaps || []).length && (
+        <p className="small tight">Still missing: {e.gaps.join(' · ')}</p>
+      )}
+      {e.outcome === 'stop' && <p className="small muted tight">No further search: the results cover what is needed.</p>}
+      {e.outcome === 'repeat' && <p className="small muted tight">Stopped: the proposed search repeated one already run.</p>}
+      {e.outcome === 'failed' && e.detail && <p className="err small tight">{e.detail}</p>}
+      {!!(e.queries || []).length && <table className="grid">
         <thead><tr><th style={{ width: '38%' }}>Query</th><th>Why</th></tr></thead>
         <tbody>
           {(e.queries || []).map((q, i) => (
@@ -79,7 +85,7 @@ function PlanBody({ e }) {
             </tr>
           ))}
         </tbody>
-      </table>
+      </table>}
     </>
   )
 }
@@ -196,7 +202,21 @@ function ChooseSitesBody({ e }) {
   )
 }
 
+function LinkChoice({ c }) {
+  return (
+    <div className="why-block">
+      <span className="why-label">Link choice — {c.considered ?? 0} links offered, {(c.picked || []).length} followed</span>
+      {c.covered && <div><strong>Page states:</strong> {c.covered}</div>}
+      {c.missing && <div><strong>Missing:</strong> {c.missing}</div>}
+      {c.reason && <div><strong>Why:</strong> {c.reason}</div>}
+      {c.detail && <div className="err">{c.detail}</div>}
+    </div>
+  )
+}
+
 function PageBody({ e, followed }) {
+  const choice = followed.find((x) => x.tool === 'select_links')
+  const pages = followed.filter((x) => x.tool === 'scrape')
   return (
     <>
       <div className="kv">
@@ -209,6 +229,7 @@ function PageBody({ e, followed }) {
           )}
           <span className="tag muted">{(e.chars ?? 0).toLocaleString()} chars</span>
           {e.bare_domain && <span className="tag warn">homepage</span>}
+          {e.anchors_found != null && <span className="tag muted">{e.anchors_found} links in page HTML</span>}
         </div>
       </div>
       {e.page_title && <div className="pagetitle">{e.page_title}</div>}
@@ -225,12 +246,13 @@ function PageBody({ e, followed }) {
           <pre className="mono small scraped">{e.preview}</pre>
         </details>
       )}
-      {!!followed.length && (
+      {choice && <LinkChoice c={choice} />}
+      {!!pages.length && (
         <div className="nested">
           <div className="nested-label">
-            {plural(followed.length, 'page followed from here', 'pages followed from here')}
+            {plural(pages.length, 'page followed from here', 'pages followed from here')}
           </div>
-          {followed.map((child) => (
+          {pages.map((child) => (
             <div className="nested-item" key={child.seq}>
               <PageBody e={child} followed={[]} />
             </div>
@@ -474,6 +496,7 @@ function headline(e) {
     case 'plan':
       if (e.outcome === 'failed') return 'planning failed'
       if (e.outcome === 'short') return `${(e.queries || []).length} of ${e.asked} queries`
+      if (e.step) return e.outcome === 'ok' ? `search step ${e.step}: ${e.queries?.[0]?.query || ''}` : `search step ${e.step}: stopped`
       return plural((e.queries || []).length, 'query', 'queries')
     case 'search': {
       const n = (e.results || []).length
@@ -624,6 +647,12 @@ function nestPages(events) {
       (a) => a.tool === 'analyze' && a.seq < e.seq && (a.candidates || []).some((c) => c.url === e.url),
     )
     if (site) attach(site.seq, e)
+  })
+  // Link choices: under the page they were made on.
+  events.forEach((e) => {
+    if (e.tool !== 'select_links') return
+    const page = [...events].reverse().find((p) => p.tool === 'scrape' && p.url === e.url && p.seq < e.seq)
+    if (page) attach(page.seq, e)
   })
   return {
     // "Follow links" is folded into the page card it belongs to.

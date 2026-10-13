@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from html.parser import HTMLParser
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import date, datetime
 from email.utils import parsedate_to_datetime
@@ -354,6 +355,38 @@ def _links(doc: Any) -> tuple[str, ...]:
     return tuple(dict.fromkeys(links))
 
 
+class _AnchorParser(HTMLParser):
+    """Collects every <a href> with its visible text."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.anchors: list[tuple[str, str]] = []
+        self._href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self._href = dict(attrs).get("href")
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            if self._href:
+                self.anchors.append((self._href, " ".join("".join(self._text).split())[:120]))
+            self._href = None
+
+
+def _page_anchors(raw_html: str) -> tuple[tuple[str, str], ...]:
+    """The page's own links from its raw HTML, menus and footers included."""
+    parser = _AnchorParser()
+    parser.feed(raw_html)
+    return tuple(dict.fromkeys(parser.anchors))
+
+
 async def tool_firecrawl_fetch(
     url: str,
     *,
@@ -361,6 +394,7 @@ async def tool_firecrawl_fetch(
     dry_run: bool = False,
     only_main_content: bool = True,
     wait_for: int = 0,
+    page_links: bool = False,
 ) -> EvidencePage:
     if dry_run:
         return EvidencePage(
@@ -377,7 +411,8 @@ async def tool_firecrawl_fetch(
 
     client = Firecrawl(api_key=require("FIRECRAWL_API_KEY"))
     kwargs: dict[str, Any] = {
-        "formats": ["markdown", "links"],
+        # rawHtml on first pages: main-content text stays clean, menu links come from the HTML.
+        "formats": ["markdown", "links", *(["rawHtml"] if page_links else [])],
         "only_main_content": only_main_content,
         "timeout": 120_000,
     }
@@ -424,4 +459,5 @@ async def tool_firecrawl_fetch(
         status_code=int(status) if isinstance(status, (int, float)) else None,
         content_type=_first_text(meta, "content_type", "contentType"),
         links=_links(doc),
+        anchors=_page_anchors(str(getattr(doc, "raw_html", None) or "")) if page_links else (),
     )
