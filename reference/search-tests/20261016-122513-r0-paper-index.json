@@ -1,0 +1,329 @@
+[
+ {
+  "sketch": {
+   "work": "ConClip for foreign items",
+   "title": "ConClip: Detecting and Rejecting Foreign Items in Edge-Deployed Reverse Vending Machines",
+   "abstract": "Reverse vending machines and Deposit Return System infrastructure must accept only deposit-bearing recyclables, but foreign items—non-eligible objects, debris and other contaminants—can enter the input stream, causing jams and raising contamination. We propose ConClip, a detection and rejection component for foreign items that combines on-device multi-sensor recognition with Retearn’s five-level waste taxonomy and validation logic. The method is evaluated on Retearn’s Reklaim RVM line, which runs fully offline on NVIDIA Jetson edge AI hardware across deployments in India and Bhutan."
+  },
+  "results": [
+   {
+    "url": "https://doi.org/10.1109/iccsp64183.2025.11088532",
+    "title": "Optimizing Contaminant Detection in Curbside Recycling Streams with IoT and Deep Learning",
+    "published": "2025-06-05T00:00:00.000Z",
+    "paper_title": "Optimizing Contaminant Detection in Curbside Recycling Streams with IoT and Deep Learning",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": "2025"
+   },
+   {
+    "url": "https://www.mdpi.com/2076-3417/13/20/11464",
+    "title": "A “Hardware-Friendly” Foreign Object Identification Method for Belt Conveyors Based on Improved YOLOv8",
+    "published": "2023-08-12T00:00:00.000Z",
+    "paper_title": "A “Hardware-Friendly” Foreign Object Identification Method for Belt Conveyors Based on Improved YOLOv8",
+    "publisher": "MDPI",
+    "venue": "Applied Sciences",
+    "venue_kind": "journal",
+    "year": "2023"
+   },
+   {
+    "url": "https://doi.org/10.3390/data11090234",
+    "title": "MMoRWaD: A Multimodal Dataset for Recyclable Waste Recognition Acquired with an Edge-Node Reverse Vending Machine Station",
+    "published": "2026-09-10T00:00:00.000Z",
+    "paper_title": "MMoRWaD: A Multimodal Dataset for Recyclable Waste Recognition Acquired with an Edge-Node Reverse Vending Machine Station",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": null
+   },
+   {
+    "url": "https://doi.org/10.3390/recycling8060086",
+    "title": "A Systematic Literature Review of Waste Identification in Automatic Separation Systems",
+    "published": "2023-11-02T00:00:00.000Z",
+    "paper_title": "A Systematic Literature Review of Waste Identification in Automatic Separation Systems",
+    "publisher": "MDPI",
+    "venue": "Recycling",
+    "venue_kind": "journal",
+    "year": "2023"
+   },
+   {
+    "url": "https://doi.org/10.1049/smc2.12057",
+    "title": "Evaluation of practical edge computing CNN‐based solutions for intelligent recycling bins",
+    "published": "2023-06-07T00:00:00.000Z",
+    "paper_title": "Evaluation of practical edge computing CNN-based solutions for intelligent recycling bins",
+    "publisher": "IET (John Wiley & Sons Ltd on behalf of The Institution of Engineering and Technology)",
+    "venue": "IET Smart Cities",
+    "venue_kind": "journal",
+    "year": "2023"
+   },
+   {
+    "url": "https://doi.org/10.1016/j.jenvman.2026.129182",
+    "title": "A smart recycling object identification system in vending machines based on edge computing platform and Petri net model",
+    "published": "2026-03-05T00:00:00.000Z",
+    "paper_title": "A smart recycling object identification system in vending machines based on edge computing platform and Petri net model",
+    "publisher": "null",
+    "venue": "Journal of Environmental Management",
+    "venue_kind": "journal",
+    "year": "2026"
+   },
+   {
+    "url": "https://doi.org/10.1109/ciotsc67482.2025.11413100",
+    "title": "Intelligent Garbage Sorting Device Based on an Improved YOLOv5 Detection Algorithm",
+    "published": "2025-11-07T00:00:00.000Z",
+    "paper_title": "Intelligent Garbage Sorting Device Based on an Improved YOLOv5 Detection Algorithm",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": "preprint only",
+    "year": "2025"
+   },
+   {
+    "url": "https://doi.org/10.26555/jiteki.v10i2.29208",
+    "title": "Real-time Recyclable Waste Detection Using YOLOv8 for Reverse Vending Machines",
+    "published": "2024-07-02T00:00:00.000Z",
+    "paper_title": "Real-time Recyclable Waste Detection Using YOLOv8 for Reverse Vending Machines",
+    "publisher": "Jurnal Ilmiah Teknik Elektro Komputer dan Informatika (JITEKI)",
+    "venue": "Jurnal Ilmiah Teknik Elektro Komputer dan Informatika",
+    "venue_kind": "journal",
+    "year": "2024"
+   },
+   {
+    "url": "https://www.mdpi.com/1424-8220/25/21/6634",
+    "title": "Computer Vision for Glass Waste: Technologies and Sensors",
+    "published": "2025-09-01T00:00:00.000Z",
+    "paper_title": "Computer Vision for Glass Waste: Technologies and Sensors",
+    "publisher": "MDPI",
+    "venue": "Sensors",
+    "venue_kind": "journal",
+    "year": "2025"
+   },
+   {
+    "url": "https://doi.org/10.1109/nigercon62786.2024.10927306",
+    "title": "Optimization of Waste Management Disposal Using Edge Impulse Studio on Tiny-Machine Learning (Tiny-ML)",
+    "published": "2024-11-26T00:00:00.000Z",
+    "paper_title": "Optimization of Waste Management Disposal Using Edge Impulse Studio on Tiny-Machine Learning (Tiny-ML)",
+    "publisher": "null",
+    "venue": "null",
+    "venue_kind": "unknown",
+    "year": "null"
+   }
+  ]
+ },
+ {
+  "sketch": {
+   "work": "camera cleanliness for RVMs",
+   "title": "Camera Cleanliness Diagnostics for Reverse Vending Machines in Field Deployments",
+   "abstract": "RVM recognition depends on fused RGB, time-of-flight depth and NIR cameras, but lenses can become soiled by dust, moisture and handling in outdoor, high-altitude sites, silently degrading material detection. We develop quality metrics and an on-device diagnostic method to monitor camera cleanliness and flag degradation for maintenance without cloud dependency. The approach is validated on Retearn’s Reklaim RVM deployments, including the Char Dham circuit and other India and Bhutan installations operating from -10°C to 60°C."
+  },
+  "results": [
+   {
+    "url": "https://doi.org/10.3390/data11090234",
+    "title": "MMoRWaD: A Multimodal Dataset for Recyclable Waste Recognition Acquired with an Edge-Node Reverse Vending Machine Station",
+    "published": "2026-09-10T00:00:00.000Z",
+    "paper_title": "MMoRWaD: A Multimodal Dataset for Recyclable Waste Recognition Acquired with an Edge-Node Reverse Vending Machine Station",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": null
+   },
+   {
+    "url": "https://doi.org/10.21227/s9he-yx37",
+    "title": "Thermal Images with different amount of contaminats on the lens",
+    "published": "2024-06-17T00:00:00.000Z",
+    "paper_title": "Thermal Images with different amount of contaminats on the lens",
+    "publisher": "IEEE DataPort",
+    "venue": "IEEE DataPort",
+    "venue_kind": "preprint only",
+    "year": "2024"
+   },
+   {
+    "url": "https://doi.org/10.23919/iccas63016.2024.10773253",
+    "title": "Soiling Builds up Gradually : Soiling Semantic Segmentation",
+    "published": "2024-10-29T00:00:00.000Z",
+    "paper_title": "Soiling Builds up Gradually : Soiling Semantic Segmentation",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": "unknown",
+    "year": "2024"
+   },
+   {
+    "url": "https://doi.org/10.26555/jiteki.v10i2.29208",
+    "title": "Real-time Recyclable Waste Detection Using YOLOv8 for Reverse Vending Machines",
+    "published": "2024-07-02T00:00:00.000Z",
+    "paper_title": "Real-time Recyclable Waste Detection Using YOLOv8 for Reverse Vending Machines",
+    "publisher": null,
+    "venue": "Jurnal Ilmiah Teknik Elektro Komputer dan Informatika (JITEKI)",
+    "venue_kind": "journal",
+    "year": "2024"
+   },
+   {
+    "url": "https://doi.org/10.36948/ijfmr.2026.v08i03.77271",
+    "title": "Reverse Vending: A Comprehensive Review of Innovative Approach in Embedded System, Sensing Accuracy, and Sustainability Implications",
+    "published": "2026-05-11T00:00:00.000Z",
+    "paper_title": "Reverse Vending: A Comprehensive Review of Innovative Approach in Embedded System, Sensing Accuracy, and Sustainability Implications",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": "2026"
+   },
+   {
+    "url": "https://doi.org/10.1007/978-981-97-1463-6_28",
+    "title": "Integration of a Reverse Vending Machine Sensing System in Sorting and Detecting Plastic Bottle Waste",
+    "published": "2024-01-01T00:00:00.000Z",
+    "paper_title": "Integration of a Reverse Vending Machine Sensing System in Sorting and Detecting Plastic Bottle Waste",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": "unknown",
+    "year": "2024"
+   },
+   {
+    "url": "https://doi.org/10.1016/j.heliyon.2024.e25182",
+    "title": "Indicators and characteristics of PET packaging collected in a Deposit and Refund System pilot project",
+    "published": "2024-01-26T00:00:00.000Z",
+    "paper_title": "Indicators and characteristics of PET packaging collected in a Deposit and Refund System pilot project",
+    "publisher": "Elsevier",
+    "venue": "Heliyon",
+    "venue_kind": "journal",
+    "year": "2024"
+   },
+   {
+    "url": "https://doi.org/10.1007/978-981-97-3847-2_20",
+    "title": "Convolutional Neural Networks Performance Study for Image Processing of Waste Segregation for Reverse Vending Machine",
+    "published": "2024-01-01T00:00:00.000Z",
+    "paper_title": "Convolutional Neural Networks Performance Study for Image Processing of Waste Segregation for Reverse Vending Machine",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": null
+   },
+   {
+    "url": "https://doi.org/10.1109/iccmso67468.2025.00042",
+    "title": "RecycLight: Enhancing PET Bottle Collection for Sustainable Waste Management in Universities with the Use of Optical Recognition in Reverse Vending Machine",
+    "published": "2025-06-20T00:00:00.000Z",
+    "paper_title": "RecycLight: Enhancing PET Bottle Collection for Sustainable Waste Management in Universities with the Use of Optical Recognition in Reverse Vending Machine",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": null
+   },
+   {
+    "url": "https://www.mdpi.com/2076-3417/15/13/7353",
+    "title": "Innovative AIoT Solutions for PET Waste Collection in the Circular Economy Towards a Sustainable Future",
+    "published": "2025-06-30T00:00:00.000Z",
+    "paper_title": "Innovative AIoT Solutions for PET Waste Collection in the Circular Economy Towards a Sustainable Future",
+    "publisher": "MDPI",
+    "venue": "Applied Sciences",
+    "venue_kind": "journal",
+    "year": "2025"
+   }
+  ]
+ },
+ {
+  "sketch": {
+   "work": "custom models for object detection",
+   "title": "Custom CNN–Transformer Object Detection for On-Device Recyclable Recognition in Reverse Vending Machines",
+   "abstract": "Generic object detectors struggle with crushed, wet, dirty and label-removed waste items across 200+ material and form classes under edge latency and offline constraints. We build custom CNN plus attention/transformer detection models trained on 2M+ labelled waste images from 50+ Indian locations, quantised to 60% smaller and deployed with TensorRT on NVIDIA Jetson modules. The models power Retearn’s Reklaim RVM line, achieving >90% material detection and <120 ms full on-device recognition, contamination detection and validation in India and Bhutan."
+  },
+  "results": [
+   {
+    "url": "https://doi.org/10.1109/iwis66215.2025.11142439",
+    "title": "Real-Time Waste Detection on Edge Device",
+    "published": "2025-07-21T00:00:00.000Z",
+    "paper_title": "Real-Time Waste Detection on Edge Device",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": "unknown",
+    "year": "2025"
+   },
+   {
+    "url": "https://doi.org/10.26555/jiteki.v10i2.29208",
+    "title": "Real-time Recyclable Waste Detection Using YOLOv8 for Reverse Vending Machines",
+    "published": "2024-07-02T00:00:00.000Z",
+    "paper_title": "Real-time Recyclable Waste Detection Using YOLOv8 for Reverse Vending Machines",
+    "publisher": null,
+    "venue": "Jurnal Ilmiah Teknik Elektro Komputer dan Informatika (JITEKI)",
+    "venue_kind": "journal",
+    "year": "2024"
+   },
+   {
+    "url": "https://doi.org/10.1117/12.3077583",
+    "title": "A review of real-time object detection for sustainable edge deployment in waste sorting sites",
+    "published": "2025-08-15T00:00:00.000Z",
+    "paper_title": "A review of real-time object detection for sustainable edge deployment in waste sorting sites",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": "2025"
+   },
+   {
+    "url": "https://doi.org/10.1109/ojcs.2025.3630508",
+    "title": "Application of Vision Transformers to Contamination Detection in Densely Cluttered Waste Scenes",
+    "published": "2025-01-01T00:00:00.000Z",
+    "paper_title": "Application of Vision Transformers to Contamination Detection in Densely Cluttered Waste Scenes",
+    "publisher": "IEEE Open Journal of the Computer Society",
+    "venue": "IEEE Open Journal of the Computer Society",
+    "venue_kind": "journal",
+    "year": "2025"
+   },
+   {
+    "url": "https://doi.org/10.1049/smc2.12057",
+    "title": "Evaluation of practical edge computing CNN‐based solutions for intelligent recycling bins",
+    "published": "2023-06-07T00:00:00.000Z",
+    "paper_title": "Evaluation of practical edge computing CNN-based solutions for intelligent recycling bins",
+    "publisher": "IET",
+    "venue": "IET Smart Cities",
+    "venue_kind": "journal",
+    "year": "2023"
+   },
+   {
+    "url": "https://doi.org/10.3390/su132111572",
+    "title": "Recycling Waste Classification Using Vision Transformer on Portable Device",
+    "published": "2024-12-09T00:00:00.000Z",
+    "paper_title": "Recycling Waste Classification Using Vision Transformer on Portable Device",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": null
+   },
+   {
+    "url": "https://doi.org/10.3390/data11090234",
+    "title": "MMoRWaD: A Multimodal Dataset for Recyclable Waste Recognition Acquired with an Edge-Node Reverse Vending Machine Station",
+    "published": "2026-09-10T00:00:00.000Z",
+    "paper_title": "MMoRWaD: A Multimodal Dataset for Recyclable Waste Recognition Acquired with an Edge-Node Reverse Vending Machine Station",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": null
+   },
+   {
+    "url": "https://doi.org/10.1016/j.clet.2026.101284",
+    "title": "Hybrid Attention Transformer enabled intelligent recycling-oriented sorting of multi-type beverage containers under degraded waste conditions for circular economy systems",
+    "published": "2026-07-27T00:00:00.000Z",
+    "paper_title": "Hybrid Attention Transformer enabled intelligent recycling-oriented sorting of multi-type beverage containers under degraded waste conditions for circular economy systems",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": "2026"
+   },
+   {
+    "url": "https://doi.org/10.3390/s24134339",
+    "title": "An MRS-YOLO Model for High-Precision Waste Detection and Classification",
+    "published": "2024-07-04T00:00:00.000Z",
+    "paper_title": "An MRS-YOLO Model for High-Precision Waste Detection and Classification",
+    "publisher": "MDPI",
+    "venue": "Sensors",
+    "venue_kind": "journal",
+    "year": "2024"
+   },
+   {
+    "url": "https://doi.org/10.1109/idciot64235.2025.10914836",
+    "title": "Advancing Deep Learning on Edge Devices: Fine-Tuning and Deployment of YOLOv7 Model for Efficient Object Detection in AI Based Computer Vision Applications",
+    "published": "2025-02-05T00:00:00.000Z",
+    "paper_title": "Advancing Deep Learning on Edge Devices: Fine-Tuning and Deployment of YOLOv7 Model for Efficient Object Detection in AI Based Computer Vision Applications",
+    "publisher": null,
+    "venue": null,
+    "venue_kind": null,
+    "year": "2025"
+   }
+  ]
+ }
+]

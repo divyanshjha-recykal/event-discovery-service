@@ -103,8 +103,9 @@ async def attach_eligibility(
     organizing_body: str,
     base_title: str,
     cycle_year: int,
+    field: str = "eligibility",
 ) -> dict | None:
-    """Store an eligibility verdict on its opportunity record.
+    """Store a verdict on its opportunity record: `eligibility`, or `fit` for a research venue.
 
     Keyed on the identity, not on `source_url`. One page routinely carries
     several programmes — three records once shared a single awards page — and
@@ -116,6 +117,6 @@ async def attach_eligibility(
     identity = opportunity_identity(organizing_body, base_title, cycle_year)
     return await db[OPPORTUNITIES].find_one_and_update(
         identity,
-        {"$set": {"eligibility": result, "eligibility_evaluated_at": datetime.now(timezone.utc)}},
+        {"$set": {field: result, f"{field}_evaluated_at": datetime.now(timezone.utc)}},
         return_document=ReturnDocument.AFTER,
     )

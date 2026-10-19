@@ -19,3 +19,8 @@ node_modules
 # Exported reports
 opportunities.csv
 *.report.csv
+
+# Bills of materials hold internal costs; never commit
+docs/*.xlsx
+# Product profiles hold internal costs; never commit
+docs/products/

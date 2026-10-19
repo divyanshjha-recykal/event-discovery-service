@@ -82,6 +82,10 @@ async def main() -> int:
                 for c in criteria:
                     print(f"     - {c}")
 
+            if fit := d.get("fit"):
+                matched = [w for w in fit.get("works", []) if w.get("fit") != "no"]
+                print(f"  fit: {len(matched)} of {len(fit.get('works', []))} lines of work match")
+                continue
             e = d.get("eligibility")
             if not e:
                 print("  eligibility: not evaluated")

@@ -54,6 +54,7 @@ from ..profile import (
     profile_section,
     without_sections,
 )
+from .types import SPECS, Track, TypeSpec, spec_for
 from .providers import SEARCH_CONTENT_CHARS, search_provider
 from .state import (
     CandidateVerdict,
@@ -84,10 +85,12 @@ TOKENS_PICK_LINKS = 4_000      # 1k reserved for thinking, rest for the answer
 PICK_PAGE_CHARS = 3_000
 # The answer is ~1,300 tokens; the rest is headroom because the reasoning cap is advisory.
 TOKENS_SHORTLIST = 24_000
+# The reasoning cap is advisory, so the budget must hold reasoning and the answer.
+TOKENS_FIT = 20_000
 # Wave two reads 24 result lines plus the whole profile before writing, so it
 # reasons far more than wave one — which is why wave one survived 3,000 tokens
 # and wave two did not.
-TOKENS_PLAN = 8_000            # <=6 queries with rationales
+TOKENS_PLAN = 20_000           # <=6 queries with rationales, plus uncapped reasoning
 # Schema maxes near 10,400 tokens, and 40% now goes to reasoning, so the
 # content reserve has to clear that on its own: 20,000 leaves 12,000.
 TOKENS_ANALYZE = 20_000
@@ -108,24 +111,49 @@ MAX_LINKS_PER_PAGE = 2
 PLAN_WAVE_ONE = 2
 PLAN_WAVE_TWO = 3
 
-# What a run is looking for. Set by the operator, injected as one line into
-# planning and site selection — it steers what is searched for and never
-# rejects anything in code. Deliberately says nothing about sector, geography
-# or technology: those come from the profile, so the same text works for any
-# business whose profile is loaded.
-#: What a run is hunting, as a noun phrase. Every prompt that has to name the
-#: thing takes it from here, so a research run stops being told it is looking
-#: for recognition programmes.
-FOCUS_NOUN = {
-    "any": "programmes this business could enter or submit work to",
-    "award": "awards, prizes and rankings this business could be entered for",
-    "event": "events this business could speak at, exhibit at or take part in",
-    "research": (
-        "peer-reviewed technical venues — industry and applied tracks, paper "
-        "and workshop calls, and challenge tracks at established conferences "
-        "and journals"
-    ),
-}
+def _track_seats(spec: TypeSpec, seats: int) -> str:
+    """For a type with tracks: keep every track represented in the fetched seats."""
+    if not spec.tracks:
+        return ""
+    names = " and ".join(f"{t.key} ({t.label})" for t in spec.tracks)
+    return (
+        f"The TRACKS are {names}; each result shows the track its search served. "
+        f"When each track has results that pass, place the best of each within "
+        f"the first {seats} picks.\n"
+    )
+
+
+def _spec_of(runtime: WorkflowRuntime, track: str) -> TypeSpec:
+    """The rules for one query or result: its own type's in an every-type run, else the run's."""
+    spec = _spec(runtime)
+    return spec_for(track) if spec.key == "any" and track in SPECS else spec
+
+
+def _track_rules(track: Track) -> str:
+    """A track's own query rules when the track is a type; nothing otherwise."""
+    if track.key not in SPECS:
+        return ""
+    spec = spec_for(track.key)
+    return f"; market: {spec.market_rule}" + (f" {spec.query_rule}" if spec.query_rule else "")
+
+
+def _conditions_block(spec: TypeSpec) -> str:
+    """The pass/fail conditions, per track when each track is a type of its own."""
+    if spec.tracks and all(t.key in SPECS for t in spec.tracks):
+        blocks = "\n".join(
+            f"Results on the {t.key} track ({t.label}):\n{_numbered(spec_for(t.key).rank_conditions)}"
+            for t in spec.tracks
+        )
+        return f"Fetch only results that meet every condition for their track:\n{blocks}"
+    return f"Fetch only results that meet every condition:\n{_numbered(spec.rank_conditions)}"
+
+
+def _numbered(items: tuple[str, ...]) -> str:
+    return "\n".join(f"{number}. {item}" for number, item in enumerate(items, 1))
+
+
+def _spec(runtime: WorkflowRuntime) -> TypeSpec:
+    return spec_for(runtime.focus)
 
 
 def _constraints(runtime: WorkflowRuntime) -> str:
@@ -137,100 +165,72 @@ def _angles(runtime: WorkflowRuntime) -> str:
 
 
 def _focus_noun(runtime: WorkflowRuntime) -> str:
-    return FOCUS_NOUN.get(runtime.focus or "any", FOCUS_NOUN["any"])
+    return _spec(runtime).noun
 
 
-FOCUS_HINT = {
-    "award": (
-        "THIS RUN WANTS AWARDS. Prizes, rankings and honours this business "
-        "could be entered for or named to."
-    ),
-    "event": (
-        "THIS RUN WANTS EVENTS. Conferences, summits, forums and expos this "
-        "business could participate at, exhibit at or take part in to demonstrate it's products and/or technology."
-    ),
-    "research": (
-        "THIS RUN WANTS PEER-REVIEWED TECHNICAL VENUES WHERE A COMPANY'S "
-        "ENGINEERING TEAM PUBLISHES, PRESENTS OR COMPETES — industry, applied "
-        "and application tracks, paper and workshop calls, and challenge or "
-        "competition tracks hosted by established international conferences "
-        "and journals. Prefer venues run or sponsored by recognised scholarly "
-        "bodies, and workshops held at those conferences, including workshops "
-        "on AI for sustainability or the environment. Take the fields from the "
-        "profile's Technology section — its research topics and current "
-        "research first, then its methods, models, sensing and datasets — and "
-        "name the subfield each belongs to. Not wanted: "
-        "standalone hackathons, student or individual competitions, developer "
-        "challenges, and conference series that run many unrelated events. "
-        "Never name the product."
-    ),
-}
+def _tracks_block(runtime: WorkflowRuntime) -> str:
+    """The type's tracks for the planner, or nothing for a type without them."""
+    tracks = _spec(runtime).tracks
+    if not tracks:
+        return ""
+    lines = "\n".join(f"- {t.key}: {t.label} — {t.source}{_track_rules(t)}" for t in tracks)
+    return (
+        "TRACKS: write the same number of queries for each track, and set each "
+        "query's `track` to its key. Within a track, each query takes a different "
+        f"line of work.\n{lines}\n"
+    )
+
+
+def _checked_track(runtime: WorkflowRuntime, track: str) -> str:
+    """The query's track if the type has tracks; an unknown key stops planning."""
+    keys = [t.key for t in _spec(runtime).tracks]
+    if not keys:
+        return ""
+    if track not in keys:
+        raise ValueError(f"planned query has track {track!r}; expected one of {keys}")
+    return track
+
+
+def _next_track(runtime: WorkflowRuntime, ran: list[PlannedQuery]) -> Track | None:
+    """The track with the fewest queries so far; ties go to the one listed first."""
+    tracks = _spec(runtime).tracks
+    if not tracks:
+        return None
+    counts = Counter(query.track for query in ran)
+    return min(tracks, key=lambda t: counts.get(t.key, 0))
 
 
 def _focus_line(runtime: WorkflowRuntime) -> str:
-    """The operator's chosen focus as one prompt line, or nothing."""
-    hint = FOCUS_HINT.get(runtime.focus or "any", "")
-    return f"\n{hint}\n" if hint else ""
+    """The run type's brief as one prompt line, or nothing for an every-type run."""
+    brief = _spec(runtime).brief
+    return f"\n{brief}\n" if brief else ""
 
 
-# How the search engine matches — the one thing the model cannot work out by
-# looking at its own results, because a result set contains no counterfactual.
-#
-# This said "three or four content words each; every extra word narrows what
-# comes back", which is how a boolean keyword engine behaves and not how Tavily
-# behaves. Tavily is semantic: it parses intent, and its own guidance is natural
-# language up to 400 characters, with longer queries doing BETTER on the
-# `advanced` depth we use. So the rule was capping queries at four words on the
-# one setting that rewards detail, and turning every search into a topic lookup.
 _QUERY_RULES = """Query rules:
 - Write each query as a description of the page you want to find: what kind of page it is,
   what it covers, and who it is for. The search engine matches pages to descriptions, not keywords.
 - One angle per query, about a dozen words. Never stack several ideas.
 - The participant is always this business, as CONSTRAINTS define it.
-- {market}
-- No year; state timing in words. Exception: calls for papers.
+- {market}{type_rule}
+- Include the year of the edition you want: the next one whose entry or submission
+  window has not closed, usually {this_year} or {next_year}.
 - Never name the product category from SEARCH ANGLES.
 - No quotation marks. Do not search for a programme the profile already names.
 
 Examples of the shape to follow; their fields and places are deliberately unrelated to this business:
 {examples}"""
 
-_MARKET_RULE = {
-    "research": (
-        "Do not name a country: peer-reviewed venues are international, and the "
-        "subfield decides fit."
-    ),
-}
-_DEFAULT_MARKET_RULE = (
-    "Name the primary market from CONSTRAINTS, or ask for programmes open to "
-    "entrants based there."
-)
-_QUERY_EXAMPLES = {
-    "award": (
-        '"nominations page for a national award recognising fintech startups in '
-        'Brazil" names the page, the field, the entrant and the market.'
-    ),
-    "event": (
-        '"exhibitor registration page for an agritech trade show in Indonesia" '
-        "names the page, the field, how a company takes part, and where."
-    ),
-    "research": (
-        '"call for papers page of an international speech recognition conference '
-        'with an industry track" names the page, the field, and that companies can submit.'
-    ),
-}
 
-
-def _query_rules(runtime: WorkflowRuntime) -> str:
-    """The query rules for this run's type: its market rule and its example."""
-    focus = runtime.focus or "any"
-    examples = (
-        [_QUERY_EXAMPLES[focus]] if focus in _QUERY_EXAMPLES else list(_QUERY_EXAMPLES.values())
-    )
+def _query_rules(runtime: WorkflowRuntime, today: date) -> str:
+    """The query rules for this run's type: its market rule, the year, its examples."""
+    spec = _spec(runtime)
     return _QUERY_RULES.format(
-        market=_MARKET_RULE.get(focus, _DEFAULT_MARKET_RULE),
-        examples="\n".join(f"- {example}" for example in examples),
+        market=spec.market_rule,
+        type_rule=f"\n- {spec.query_rule}" if spec.query_rule else "",
+        this_year=today.year, next_year=today.year + 1,
+        examples="\n".join(f"- {example}" for example in spec.query_examples),
     )
+
 
 # Per page, not per bundle. A single positional slice across the whole bundle
 # meant a long seed page consumed the entire window and the L1 pages we paid to
@@ -267,6 +267,7 @@ HEAVY_CALLS = frozenset({
     "opportunity_candidate_analysis",
     "opportunity_query_plan",
     "opportunity_search_step",
+    "research_fit",
 })
 
 
@@ -279,6 +280,7 @@ class _PlannedQueryModel(BaseModel):
     geography: str
     target_year: int
     rationale: str
+    track: str = Field(description="The key of the track this query serves; empty when the prompt lists no tracks.")
 
 
 class _QueryPlanModel(BaseModel):
@@ -372,6 +374,13 @@ class _ShortlistPickModel(BaseModel):
     reason: str = Field(max_length=600)
 
 
+class _ExcludedModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int
+    reason: str = Field(max_length=300)
+
+
 class _ShortlistModel(BaseModel):
     """A ranked shortlist, best first — not a set of picks.
 
@@ -390,6 +399,25 @@ class _ShortlistModel(BaseModel):
 
     observation: str = Field(default="", max_length=1_200)
     picks: list[_ShortlistPickModel] = Field(max_length=10)
+    excluded: list[_ExcludedModel] = Field(max_length=8)
+
+
+class _WorkFitModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    work: str = Field(max_length=200)
+    fit: Literal["fits", "partly", "no"]
+    topic: str = Field(max_length=300)
+    reason: str = Field(max_length=400)
+
+
+class _FitModel(BaseModel):
+    """Which of the business's work a call for papers could take, line by line."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    works: list[_WorkFitModel] = Field(max_length=16)
+    venue_note: str = Field(max_length=400)
 
 
 class _LinkChoiceModel(BaseModel):
@@ -623,7 +651,7 @@ async def _record(
 
 
 async def _memory(runtime: WorkflowRuntime) -> str:
-    """The whole business profile, plus what earlier runs already found.
+    """The whole business profile, minus the sections every prompt receives separately.
 
     The whole document, deliberately. This used to be a five-section
     distillation — Identity, sector, geography, recognition history,
@@ -637,22 +665,20 @@ async def _memory(runtime: WorkflowRuntime) -> str:
     US cents a run. That is what it cost to make the planner unable to describe
     the company it is searching on behalf of.
     """
-    orgs = await known_orgs(runtime.db)
-    upcoming = await due_soon(runtime.db, lookahead_months=2)
-    programs = "\n".join(
-        f"- {item['organizing_body']} — {item['base_title']}"
-        for item in upcoming
-    ) or "(none due soon)"
-    # Deliberately NOT the full recorded list. Feeding every stored programme
-    # back into the prompt was meant to keep naming consistent; in practice it
-    # put the same programmes in front of the model run after run, and one it
-    # should have dropped kept reappearing because it was being shown.
-    return (
-        f"{without_sections(runtime.profile_text, SEARCH_CONSTRAINTS, SEARCH_ANGLES)}"
-        f"\n\nKnown organizing bodies: "
-        f"{', '.join(orgs) if orgs else '(none)'}\n"
-        f"Programs due soon:\n{programs}"
-    )
+    # Off until the catalogue gives stored programmes a purpose in the prompt.
+    # orgs = await known_orgs(runtime.db)
+    # upcoming = await due_soon(runtime.db, lookahead_months=2)
+    # programs = "\n".join(
+    #     f"- {item['organizing_body']} — {item['base_title']}"
+    #     for item in upcoming
+    # ) or "(none due soon)"
+    # return (
+    #     f"{without_sections(runtime.profile_text, SEARCH_CONSTRAINTS, SEARCH_ANGLES)}"
+    #     f"\n\nKnown organizing bodies: "
+    #     f"{', '.join(orgs) if orgs else '(none)'}\n"
+    #     f"Programs due soon:\n{programs}"
+    # )
+    return without_sections(runtime.profile_text, SEARCH_CONSTRAINTS, SEARCH_ANGLES)
 
 
 _PLAN_SYSTEM = "Return a search plan as JSON matching the supplied schema."
@@ -722,7 +748,7 @@ async def plan_queries_node(
         # A re-plan gets the whole allowance at once: the second wave is skipped
         # on that pass, so asking for two here would halve the retry.
         want = asked = (
-            PLAN_WAVE_ONE
+            max(PLAN_WAVE_ONE, len(_spec(runtime).tracks))
             if state["replan_count"] == 0
             else PLAN_WAVE_ONE + PLAN_WAVE_TWO
         )
@@ -736,12 +762,13 @@ CONSTRAINTS:
 SEARCH ANGLES:
 {_angles(runtime)}
 
+{_tracks_block(runtime)}
 ## Rules
 - Opening searches: keep them broad — a field and a kind of opportunity.
 - Each query takes a different angle.
 - Use SEARCH ANGLES as directions, not phrases: rephrase them and reach
   adjacent fields.
-{_query_rules(runtime)}
+{_query_rules(runtime, today)}
 
 BUSINESS:
 {memory}
@@ -753,7 +780,7 @@ BUSINESS:
             planned = [
                 PlannedQuery(
                     item.query, item.intent, item.geography,
-                    item.target_year, item.rationale,
+                    item.target_year, item.rationale, _checked_track(runtime, item.track),
                 )
                 for item in await _ask_for_queries(
                     runtime, "opportunity_query_plan", prompt, want
@@ -782,6 +809,7 @@ BUSINESS:
                 "geography": item.geography,
                 "target_year": item.target_year,
                 "rationale": item.rationale,
+                "track": item.track,
             }
             for item in planned
         ],
@@ -805,7 +833,7 @@ def _search_observation(
             if (hit.entry_deadline or hit.event_date or "9999") < today
         )
         lines = [
-            f"{number}. {planned.query}",
+            f"{number}. {planned.query}" + (f"  [track: {planned.track}]" if planned.track else ""),
             f"   {len(rows)} results · types: "
             + (", ".join(f"{t} {n}" for t, n in types.most_common()) or "none")
             + f" · dates already past: {past} · duplicates dropped: {dropped.get(planned.query, 0)}",
@@ -829,8 +857,14 @@ async def _search_step(
     memory: str,
     today: date,
     remaining: int,
+    track: Track | None,
 ):
     """One ReAct step: assess every search so far, then run one more or stop."""
+    serve = (
+        f"for the {track.label} track ({track.source}{_track_rules(track)}), on a line of work no "
+        "search above has covered, "
+        if track else ""
+    )
     prompt = f"""## Objective
 Today is {today.isoformat()}. You are searching for {_focus_noun(runtime)}.
 You can run up to {remaining} more searches.
@@ -850,10 +884,10 @@ SEARCH ANGLES:
    kind of page, wrong field, too broad or too narrow, past editions, wrong
    market, or off type.
 2. List what this business should see that the results do not yet cover.
-3. Write at most one next search that addresses the most important gap; its
+3. Write at most one next search {serve}addressing its most important gap; its
    rationale names that gap. Do not repeat a search above. Write none if the
    results already cover what this business should see.
-{_query_rules(runtime)}
+{_query_rules(runtime, today)}
 
 BUSINESS:
 {memory}
@@ -942,7 +976,8 @@ def _listing_lines(hit, today: str) -> list[str]:
     """Every line the ranker reads for one result, after its title."""
     lines = [
         f"     {hit.url}",
-        f"     Query: {hit.query}" + (f" · search score {hit.score:.2f}" if hit.score else ""),
+        f"     Query: {hit.query}" + (f" · search score {hit.score:.2f}" if hit.score else "")
+        + (f" · track: {hit.track}" if hit.track else ""),
         f"     {_date_line(hit, today)}",
     ]
     if facts := _facts_line(hit):
@@ -963,8 +998,8 @@ def _programme_key(hit) -> str:
 
 
 async def _shortlist(
-    ranked: list, memory: str, today: date, runtime: WorkflowRuntime
-) -> tuple[list[tuple[object, str]], str]:
+    ranked: list, memory: str, today: date, runtime: WorkflowRuntime, seats: int
+) -> tuple[list[tuple[object, str]], str, list[tuple[object, str]]]:
     """Rank the pool best-first. Raises; the caller stops the run.
 
     Returns the whole ranked list and the model's observation about the pool;
@@ -972,6 +1007,7 @@ async def _shortlist(
     list is a real answer — nothing here is worth fetching — not a failure.
     """
     pool = ranked[:SHORTLIST_POOL]
+    spec = _spec(runtime)
     listing = "\n".join(
         _listing_entry(index, hit, today.isoformat()) for index, hit in enumerate(pool)
     )
@@ -983,33 +1019,27 @@ CONSTRAINTS:
 {_constraints(runtime)}
 
 ## Decide
-Fetch only results that meet all three:
-1. Programme page — one programme, published by the body that runs it. Not a
-   news article, press release, directory or list of many programmes.
-2. Enterable — nothing in the extract excludes this business under
-   CONSTRAINTS: entrant type, market, or what is not sought. Judge the entrant
-   the programme wants, not the topic it covers.
-3. Current — the edition is not finished: no winners announced, entry not
-   closed, dates not behind today.
-Leave out any result that fails a condition. Order the rest:
-1. An entry deadline within the next 14 days.
-2. The kind of opportunity CONSTRAINTS list first among its Seeking lines, then the next.
-3. Within a kind, confidence that all three conditions hold.
+{_conditions_block(spec)}
+Leave out any result that fails a condition. Order the rest; ordering never
+removes a result:
+{_numbered(spec.rank_order)}
 
 Each result may show dates read from the page, with the sentence they came
-from, plus its publish date and any year in its title or address. Use them for
-condition 3; a publish date shows when a page was written, not whether the
-programme is current. Where a result states who may
-enter or a country, use it for condition 2.
-Judge the organisation, not the domain: newspapers, industry bodies and
-government departments run many awards.
-
+from, plus its publish date and any year in its title or address. Use dates
+only to decide whether a result is open: a date marked (passed), a past-year
+title with no date still ahead, or a stated closure means closed; no date and no
+past-year title means open. A year in the address is usually a publish date. A publish date shows when a page was written,
+not whether the programme is current. Where a result states who may take part
+or a country, use it for the conditions.
+{_track_seats(spec, seats)}
 ## Output
 - `observation` first: what this pool looks like as a whole.
 - `picks`: best first, at most 10. Copy each title exactly as shown; `index`,
   `title` and `reason` describe the same result.
-- Each reason states who the programme is open to, from the extract.
+- Each reason states who can take part and how it fits this business.
 - Only results that pass. A short or empty list is correct.
+- `excluded`: up to 8 results you left out that a reader would most expect to
+  see picked, each with one line on why.
 
 BUSINESS:
 {memory}
@@ -1028,10 +1058,14 @@ RESULTS:
             continue
         seen.add(pick.index)
         chosen.append((pool[pick.index], pick.reason))
-    return chosen, parsed.observation
+    excluded = [
+        (pool[item.index], item.reason)
+        for item in parsed.excluded if 0 <= item.index < len(pool)
+    ]
+    return chosen, parsed.observation, excluded
 
 
-def _link_chooser(runtime: WorkflowRuntime, today: date):
+def _link_chooser(runtime: WorkflowRuntime, today: date, spec: TypeSpec):
     """An async callable the traversal uses to pick which links to follow."""
 
     async def choose(page, candidates: list[tuple[str, str]]) -> list[str]:
@@ -1043,7 +1077,7 @@ def _link_chooser(runtime: WorkflowRuntime, today: date):
             for index, (url, label) in enumerate(candidates)
         )
         prompt = f"""Today is {today.isoformat()}. While looking for
-{_focus_noun(runtime)} you fetched this page:
+{spec.noun} you fetched this page:
 {page.url}
 {page.title}
 
@@ -1053,13 +1087,15 @@ THE PAGE (opening text):
 LINKS on the same site:
 {listing}
 
-1. `covered`: what this page already states about the opportunity: its dates or
-   deadline, who can take part, how to apply or submit, and its scope or categories.
+CONSTRAINTS:
+{_constraints(runtime)}
+
+1. `covered`: what this page already states about the opportunity: {spec.link_checklist}.
 2. `missing`: which of those it does not state.
 3. `indexes`: at most {runtime.limits.max_links_per_page} links most likely to state what is missing.
    A brochure, rules, guidelines or call-for-papers document counts, and a PDF is
    readable. Skip winners, past editions, news, sponsors, contact, login and
-   social pages. Return an empty list if nothing is missing or no link is likely
+   social pages, and entry routes for entrants CONSTRAINTS exclude. Return an empty list if nothing is missing or no link is likely
    to supply it.
 4. `reason`: why these links, or why none.
 """
@@ -1100,10 +1136,6 @@ async def search_node(
     seen_queries = {hit.query for hit in pool}
     found_now: list[SearchHit] = []
     provider, search = search_provider(runtime.search_provider)
-    # Research runs let Exa pick passages for each query rather than for award-style entry details.
-    query_guided = provider == "exa" and runtime.focus == "research"
-    if query_guided:
-        search = partial(search, query_guided_highlights=True)
     held: dict[str, str] = {}
     programmes: dict[str, str] = {}
     for hit in pool:
@@ -1123,11 +1155,15 @@ async def search_node(
             runtime.budget.consume("search")
             seen_queries.add(planned.query)
             try:
-                found = await search(planned.query, dry_run=runtime.dry_run)
+                # Research queries let Exa pick passages for the query, not award-style entry details.
+                guided = provider == "exa" and _spec_of(runtime, planned.track).query_guided_highlights
+                found = await (partial(search, query_guided_highlights=True) if guided else search)(
+                    planned.query, dry_run=runtime.dry_run
+                )
                 # Canonicalised here rather than when the pool is ordered, so the
                 # merge rule sees the same URL twice as one.
                 found = [
-                    replace(hit, url=canonicalize_url(hit.url))
+                    replace(hit, url=canonicalize_url(hit.url), track=planned.track)
                     for hit in found if hit.url
                 ]
                 kept = []
@@ -1166,8 +1202,9 @@ async def search_node(
                 await _record(
                     runtime, "search", node="search", query=planned.query,
                     outcome="ok" if found else "empty", provider=provider,
-                    round=round_label, intent=planned.intent, geography=planned.geography,
-                    highlights="query" if query_guided else "fixed",
+                    round=round_label, intent=planned.intent, track=planned.track,
+                    geography=planned.geography,
+                    highlights="query" if guided else "fixed",
                     rationale=planned.rationale, focus=runtime.focus,
                     types=dict(types), unreadable_summaries=unreadable,
                     on_type=types.get(runtime.focus, 0) if runtime.focus != "any" else None,
@@ -1198,19 +1235,23 @@ async def search_node(
         for step in range(1, PLAN_WAVE_TWO + 1):
             if runtime.budget.refusal("plan") or runtime.budget.refusal("search"):
                 break
+            track = _next_track(runtime, ran)
             try:
                 decision = await _search_step(
                     runtime, ran, pool + found_now, dropped, state["memory"],
-                    today, PLAN_WAVE_TWO - step + 1,
+                    today, PLAN_WAVE_TWO - step + 1, track,
                 )
-            except Exception as exc:  # noqa: BLE001 — the opening searches still stand
+            except Exception as exc:
                 detail = f"{type(exc).__name__}: {exc}"[:300]
-                runtime.warnings.append(f"search step {step} failed: {detail}")
-                await _record(runtime, "plan", node="plan", outcome="failed", detail=detail)
-                break
+                runtime.failures.append(f"search step {step} failed: {detail}")
+                await _record(runtime, "plan", node="plan", outcome="failed", step=step, detail=detail)
+                raise RuntimeError(f"search step {step} failed, run stopped: {detail}") from exc
             seen = {item.query.casefold() for item in ran}
             proposed = [
-                PlannedQuery(item.query, item.intent, item.geography, item.target_year, item.rationale)
+                PlannedQuery(
+                    item.query, item.intent, item.geography, item.target_year,
+                    item.rationale, track.key if track else "",
+                )
                 for item in decision.next_queries
             ]
             fresh = [item for item in proposed if item.query.casefold() not in seen]
@@ -1223,7 +1264,7 @@ async def search_node(
                     {
                         "query": item.query, "intent": item.intent,
                         "geography": item.geography, "target_year": item.target_year,
-                        "rationale": item.rationale,
+                        "rationale": item.rationale, "track": item.track,
                     }
                     for item in proposed
                 ],
@@ -1269,10 +1310,7 @@ async def rank_node(
     # rather than shown to the model, so neither the tokens nor the scrape are
     # paid for again. Only after two empty visits, so one bad run cannot ban a
     # programme whose cycle had simply not opened yet.
-    try:
-        known_dead = await dead_end_urls(runtime.db)
-    except Exception:  # noqa: BLE001 — memory is an optimisation, never a gate
-        known_dead = set()
+    known_dead = await dead_end_urls(runtime.db)
 
     ranked = [
         hit for hit in ordered
@@ -1318,8 +1356,8 @@ async def rank_node(
             raise RuntimeError(f"ranking could not run, run stopped: {refusal}")
         runtime.budget.consume("shortlist")
         try:
-            ranked_shortlist, observation = await _shortlist(
-                ranked, state["memory"], today, runtime
+            ranked_shortlist, observation, excluded = await _shortlist(
+                ranked, state["memory"], today, runtime, seats
             )
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"[:300]
@@ -1333,6 +1371,7 @@ async def rank_node(
         await _record(
             runtime, "shortlist", node="rank", outcome="ok",
             considered=len(ranked), observation=observation,
+            excluded=[{"url": hit.url, "title": hit.title, "reason": reason} for hit, reason in excluded],
             # The whole ranking is recorded, so near-misses below the cut stay visible.
             picked=[
                 {
@@ -1381,7 +1420,9 @@ async def fetch_node(payload: dict, *, services: WorkflowRuntime) -> Command:
     runtime = services
     pick: RankedPick = payload["pick"]
     today = date.fromisoformat(payload["as_of_date"])
-    choose_links = None if runtime.dry_run else _link_chooser(runtime, today)
+    choose_links = None if runtime.dry_run else _link_chooser(
+        runtime, today, _spec_of(runtime, pick.hit.track)
+    )
     try:
         bundle = await resolve_evidence_bundle(
             pick.hit, runtime, partial(_record, runtime),
@@ -1421,7 +1462,7 @@ async def fetch_node(payload: dict, *, services: WorkflowRuntime) -> Command:
 
 def _bundle_prompt(
     bundle: EvidenceBundle, today: str, memory: str, picked_because: str,
-    focus_noun: str, constraints: str,
+    focus_noun: str, constraints: str, record_guide: str,
 ) -> str:
     evidence = bundle.bounded_text(ANALYSIS_PAGE_CHARS)
     return f"""## Objective
@@ -1469,23 +1510,7 @@ dates would all be guesses. Set it true only when a page belonging to the
 programme itself was among the pages read. A directory is never a candidate in
 its own right.
 
-## Entry eligibility — the heart of this
-List every stated condition an entrant must satisfy, each as its own item, in
-the words the page uses. If the page states no conditions, return an empty list
-— never a sentence saying there are none, and never the event's audience or
-attendee description. Form fields ("Registration Number*") and lists of who
-attends ("CXOs & founders") are not conditions. Do not summarise them into one line and do not invent
-conditions the page does not state. Keep judging criteria (what the entry is
-scored on) and application requirements (what must be submitted) in their own
-separate lists.
-
-Use category "research" for a venue that accepts submitted work — a call for
-papers, a workshop, an industry track, a technical competition. These state no
-conditions on who may enter, because anyone may; what decides whether it is
-worth entering is whether the work fits. So for a research venue, entry
-eligibility is the SCOPE: the topics, tracks and problem areas the venue says it
-wants, each as its own item, in the page's own words. Submission format, page
-limits and anonymity rules are application requirements, not eligibility.
+{record_guide}
 
 ## Values to read off the page
   organizing_body   who RUNS it. The page identifies them in a sentence, in a
@@ -1504,10 +1529,13 @@ limits and anonymity rules are application requirements, not eligibility.
                     else removed.
   cycle_year        the year of THIS edition.
   status            "open", "closed" or "unclear".
-  submission_deadline, event_date   "YYYY-MM-DD"; "YYYY-MM" when the page gives
-                    only a month; null when not stated.
-  deadline_note     a rolling or relative deadline, and the page's other key
-                    dates with their labels ("Online screening: October 2026").
+  submission_deadline   the last date entries or submissions are accepted, as
+                    "YYYY-MM-DD" ("YYYY-MM" when the page gives only a month). An
+                    early-bird or other earlier date is not the deadline; it goes in
+                    deadline_note. Null when no final date is stated.
+  event_date        "YYYY-MM-DD" ("YYYY-MM" when only a month is given); null when not stated.
+  deadline_note     a rolling or relative deadline, and every other dated step the
+                    page lists, worded as the page words it ("Early-bird: 15 October 2026").
   confidence_note   anything you were unsure about.
 
 Use only what the pages say; never infer a deadline that is not written there. A
@@ -1538,6 +1566,7 @@ async def _analyze_bundle(
     memory: str,
     picked_because: str,
     runtime: WorkflowRuntime,
+    spec: TypeSpec,
 ) -> list[CandidateVerdict]:
     runtime.budget.consume("analyze")
     parsed = await _structured(
@@ -1546,8 +1575,8 @@ async def _analyze_bundle(
         "opportunity_candidate_analysis",
         "Return candidate decisions as strict JSON matching the supplied schema.",
         _bundle_prompt(
-            bundle, as_of_date, memory, picked_because, _focus_noun(runtime),
-            _constraints(runtime),
+            bundle, as_of_date, memory, picked_because, spec.noun,
+            _constraints(runtime), spec.record_guide,
         ),
         max_tokens=TOKENS_ANALYZE,
         salvage_key="candidates",
@@ -1861,7 +1890,8 @@ async def extract_node(payload: dict, *, services: WorkflowRuntime) -> dict:
             }
         try:
             candidates = await _analyze_bundle(
-                bundle, payload["as_of_date"], payload["memory"], pick.reason, runtime
+                bundle, payload["as_of_date"], payload["memory"], pick.reason, runtime,
+                _spec_of(runtime, pick.hit.track),
             )
         except Exception as exc:  # noqa: BLE001
             detail = f"{type(exc).__name__}: {exc}"[:300]
@@ -1935,21 +1965,35 @@ async def extract_node(payload: dict, *, services: WorkflowRuntime) -> dict:
     }
 
 
-def _feasibility_context(result) -> str:
-    """What the eligibility call is being asked to judge.
+async def _research_fit(result, runtime: WorkflowRuntime) -> dict:
+    """Which of this business's work fits a call for papers; raises on an unusable reply."""
+    topics = "\n".join(f"- {topic}" for topic in result.eligibility_criteria)
+    prompt = f"""## Objective
+Which of this business's work could be submitted to this call?
+CALL: {result.title} — {result.organizing_body}
+TOPICS the call asks for:
+{topics}
 
-    A research venue's conditions are its scope, not entry rules, so it is told
-    that rather than left to infer it from topic strings that read nothing like
-    an eligibility list.
-    """
-    context = f"{result.title} — {result.organizing_body}"
-    if result.category == "research":
-        return (
-            f"{context} (an opportunity that accepts submitted work; the conditions "
-            "below are the topics it wants, so judge whether this business has "
-            "work that fits)"
-        )
-    return context
+## Decide
+Write one row for each item on the profile's Research topics and Current research
+in house lines, in the profile's words and order. For each:
+- `fit`: "fits" when a topic names this work's problem or method; "partly" when a
+  topic names a closely related problem or method in the same subfield; "no"
+  otherwise, including when only the application area or general words match.
+- `topic`: the topic it matches, copied from TOPICS; empty for "no".
+- `reason`: one line naming what the profile says about that work.
+`venue_note`: who runs the venue and how established it is.
+Take this business's work only from the profile.
+
+PROFILE:
+{runtime.profile_text}
+"""
+    parsed = await _structured(
+        runtime, _FitModel, "research_fit",
+        "Judge which work fits a call for papers. Return JSON matching the supplied schema.",
+        prompt, max_tokens=TOKENS_FIT,
+    )
+    return parsed.model_dump()
 
 
 async def evaluate_node(
@@ -1980,13 +2024,22 @@ async def evaluate_node(
                 }
             )
             continue
+        research = result.category == "research"
         try:
+            if research:
+                fit = await _research_fit(result, runtime)
+                verdicts.append({"key": prepared.key, "fit": fit})
+                await _record(
+                    runtime, "fit", node="evaluate", url=prepared.source_url,
+                    title=result.title, outcome="ok", **fit,
+                )
+                continue
             verdict = await asyncio.wait_for(
                 asyncio.to_thread(
                     evaluate_criteria,
                     list(result.eligibility_criteria),
                     runtime.profile_text,
-                    _feasibility_context(result),
+                    f"{result.title} — {result.organizing_body}",
                     runtime.model,
                 ),
                 timeout=HEAVY_CALL_TIMEOUT_SECONDS,
@@ -2002,12 +2055,13 @@ async def evaluate_node(
             )
         except Exception as exc:  # noqa: BLE001 — one bad verdict must not stop the run
             detail = f"{type(exc).__name__}: {exc}"[:300]
-            runtime.failures.append(f"feasibility {prepared.source_url}: {detail}")
+            tool = "fit" if research else "feasibility"
+            runtime.failures.append(f"{tool} {prepared.source_url}: {detail}")
             verdicts.append(
                 {"key": prepared.key, "verdict": None, "note": detail}
             )
             await _record(
-                runtime, "feasibility", node="evaluate",
+                runtime, tool, node="evaluate",
                 url=prepared.source_url, title=result.title,
                 outcome="failed", detail=detail,
             )
@@ -2047,6 +2101,7 @@ async def store_node(
         result = prepared.record
         judged = verdicts.get(prepared.key, {})
         verdict = judged.get("verdict")
+        fit = judged.get("fit")
         ready = bool(result.eligibility_criteria)
         payload = result.model_dump()
         payload.update(
@@ -2079,6 +2134,13 @@ async def store_node(
         if verdict:
             await attach_eligibility(
                 runtime.db, verdict,
+                organizing_body=result.organizing_body,
+                base_title=result.base_title,
+                cycle_year=result.cycle_year,
+            )
+        if fit:
+            await attach_eligibility(
+                runtime.db, fit, field="fit",
                 organizing_body=result.organizing_body,
                 base_title=result.base_title,
                 cycle_year=result.cycle_year,

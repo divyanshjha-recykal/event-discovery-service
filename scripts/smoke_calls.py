@@ -21,10 +21,12 @@ from opportunity_radar.discovery.budget import RunBudget
 from opportunity_radar.discovery.state import WorkflowRuntime
 from opportunity_radar.discovery.workflow import (
     TOKENS_ANALYZE,
+    TOKENS_FIT,
     TOKENS_PICK_LINKS,
     TOKENS_PLAN,
     TOKENS_SHORTLIST,
     _AnalysisModel,
+    _FitModel,
     _LinkChoiceModel,
     _QueryPlanModel,
     _SearchStepModel,
@@ -64,6 +66,11 @@ CALLS = [
      f"Today is {TODAY}. One page:\n=== SOURCE PAGE: https://example.com/awards ===\n"
      "National Recycling Awards 2027. Run by the Example Foundation. Open to "
      "companies registered in India. Entries close 30 November 2027."),
+    ("research_fit", _FitModel, TOKENS_FIT, False,
+     "Judge which work fits a call for papers. Return JSON matching the supplied schema.",
+     "CALL: Workshop on Visual Recognition 2027\nTOPICS:\n- object detection\n"
+     "- edge deployment\nWhich of this business's work fits? PROFILE: A company "
+     "building camera-based object detection that runs on edge devices."),
 ]
 
 

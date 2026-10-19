@@ -293,8 +293,8 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
               )}
               {!!(results?.missing || []).length && (
                 <p className="small muted">
-                  {results.missing.length} record(s) this run saved are no longer in
-                  storage — the database was cleared after the run.
+                  {results.missing.length} record(s) this run saved now belong to a
+                  later run that updated them, or the database was cleared.
                 </p>
               )}
             </>

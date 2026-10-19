@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { DEFAULT_CONFIG, FOCUS, SEARCH_PROVIDERS, estimateCalls, runLabel, runStatus, shortId } from '../api.js'
+import { DEFAULT_CONFIG, FOCUS, SEARCH_PROVIDERS, estimateCalls, runLabel, runStatus, runTrack, shortId } from '../api.js'
 import { IconChevron, IconMoon, IconPlay, IconSun, IconTrash } from '../icons.jsx'
 
 // Suggestions only — the field is free text so any OpenRouter model id works,
@@ -52,7 +52,7 @@ export default function Sidebar({
         <div className="rail-runs">
           {runs.slice(0, 14).map((r) => (
             <NavLink key={r.run_id} to={`/run/${r.run_id}`}
-                     title={`${runStatus(r.status).label} · ${runLabel(r)}`}
+                     title={`${runStatus(r.status).label} · ${runTrack(r) ? `${runTrack(r)} · ` : ''}${runLabel(r)}`}
                      className={({ isActive }) => `rail-dot ${runStatus(r.status).cls}${isActive ? ' selected' : ''}`} />
           ))}
         </div>
@@ -209,6 +209,7 @@ export default function Sidebar({
                 <span className={`tag ${runStatus(r.status).cls}`}>
                   {runStatus(r.status).label}
                 </span>
+                {runTrack(r) && <span className="pill muted">{runTrack(r)}</span>}
                 <span className="mono small muted">{shortId(r.run_id)}</span>
               </div>
               <div className="small">{runLabel(r)}</div>

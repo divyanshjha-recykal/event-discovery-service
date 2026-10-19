@@ -73,6 +73,13 @@ export const VERDICT = {
   qualitative: { label: 'Needs review', cls: 'warn', order: 2 },
 }
 
+/** How one line of our work fits a research venue's call. */
+export const FIT = {
+  fits: { label: 'Fits', cls: 'ok', order: 0 },
+  partly: { label: 'Partly', cls: 'warn', order: 1 },
+  no: { label: "Doesn't fit", cls: 'muted', order: 2 },
+}
+
 /* ----------------------------------------------------------------- stages */
 
 export const STAGES = [
@@ -94,6 +101,7 @@ export const STAGE_OF = {
   actionability: 'extract',
   skip: 'extract',
   feasibility: 'evaluate',
+  fit: 'evaluate',
   save_opportunity: 'store',
 }
 
@@ -166,6 +174,12 @@ export const estimateCalls = (c) => {
 }
 
 export const shortId = (id) => (id || '').slice(0, 6)
+
+/** The track a run searched (Everything, Awards…); null for runs saved before tracks existed. */
+export const runTrack = (run) => {
+  const focus = run.budget?.focus
+  return focus ? (FOCUS.find(([v]) => v === focus)?.[1] ?? focus) : null
+}
 
 export const runLabel = (run) => {
   const when = run.started_at

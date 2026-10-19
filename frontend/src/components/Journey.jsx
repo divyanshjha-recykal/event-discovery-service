@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { outcome as outcomeOf, VERDICT } from '../api.js'
 import { IconChevron, IconDot, IconExternal, TOOL_ICON } from '../icons.jsx'
-import Opportunity from './Opportunity.jsx'
+import Opportunity, { FitTable } from './Opportunity.jsx'
 
 const BAD = new Set(['failed', 'insufficient'])
 const WARN = new Set(['fallback', 'no_new_evidence', 'partial'])
@@ -44,6 +44,7 @@ const STEP_NAME = {
   expired: 'Drop closed',
   actionability: 'Check if live',
   feasibility: 'Judge conditions',
+  fit: 'Judge fit',
   save_opportunity: 'Store',
 }
 
@@ -76,11 +77,12 @@ function PlanBody({ e }) {
       {e.outcome === 'repeat' && <p className="small muted tight">Stopped: the proposed search repeated one already run.</p>}
       {e.outcome === 'failed' && e.detail && <p className="err small tight">{e.detail}</p>}
       {!!(e.queries || []).length && <table className="grid">
-        <thead><tr><th style={{ width: '38%' }}>Query</th><th>Why</th></tr></thead>
+        <thead><tr><th style={{ width: '38%' }}>Query</th>{(e.queries || []).some((q) => q.track) && <th style={{ width: 80 }}>Track</th>}<th>Why</th></tr></thead>
         <tbody>
           {(e.queries || []).map((q, i) => (
             <tr key={i}>
               <td className="mono">{q.query}</td>
+              {(e.queries || []).some((x) => x.track) && <td><span className="tag muted">{q.track}</span></td>}
               <td className="why">{q.rationale}</td>
             </tr>
           ))}
@@ -197,6 +199,17 @@ function ChooseSitesBody({ e }) {
         <p className="hint small">
           Dimmed rows were ranked but fell outside the scrape budget.
         </p>
+      )}
+      {!!(e.excluded || []).length && (
+        <div className="nested">
+          <div className="nested-label">Left out — the ranker's reasons</div>
+          {e.excluded.map((x, i) => (
+            <div className="nested-item small" key={i}>
+              {x.title} <Url href={x.url}>{(x.url || '').replace(/^https?:\/\//, '').slice(0, 60)}</Url>
+              <div className="why">{x.reason}</div>
+            </div>
+          ))}
+        </div>
       )}
     </>
   )
@@ -422,6 +435,16 @@ function EvaluateBody({ e }) {
   )
 }
 
+function FitBody({ e }) {
+  if (e.outcome !== 'ok') return <p className="err small tight">{e.detail}</p>
+  return (
+    <>
+      <Url href={e.url} />
+      <FitTable fit={e} />
+    </>
+  )
+}
+
 function ExtractBody({ e }) {
   if (e.outcome !== 'ok') {
     return (
@@ -487,6 +510,7 @@ const BODY = {
   analyze: AnalyzeBody,
   extract: ExtractBody,
   feasibility: EvaluateBody,
+  fit: FitBody,
 }
 
 /* ------------------------------------------------------------------ step */
@@ -532,6 +556,11 @@ function headline(e) {
       return f.length ? `${found} of ${f.length} quoted from the page` : 'nothing to check'
     }
     case 'memory': return e.detail
+    case 'fit': {
+      if (e.outcome !== 'ok') return `${e.title || ''} — fit check failed`
+      const works = e.works || []
+      return `${e.title || ''} — ${works.filter((w) => w.fit !== 'no').length} of ${works.length} lines of our work fit`
+    }
     case 'feasibility': {
       if (e.outcome !== 'ok') return `${e.title || ''} — evaluation failed`
       const n = e.counts || {}

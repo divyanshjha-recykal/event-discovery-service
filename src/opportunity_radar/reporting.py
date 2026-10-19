@@ -27,7 +27,7 @@ COLUMNS = [
     "Submission deadline", "Deadline verified", "Event date",
     "Record state", "Fit score", "Fit confidence",
     "Conditions met", "Conditions not met", "Conditions unclear",
-    "Entry conditions", "Judged on", "Must submit",
+    "Entry conditions", "Fits our work", "Judged on", "Must submit",
     "Quotes verified", "Source", "Evidence pages",
 ]
 
@@ -36,6 +36,12 @@ DEFAULT_SUBJECT = "Opportunity Radar — discovered opportunities"
 
 def _join(values) -> str:
     return " | ".join(str(v) for v in (values or []))
+
+
+def _fits(doc: dict) -> list[str]:
+    """A research venue's matches: our work, the call's topic, and how well it fits."""
+    works = (doc.get("fit") or {}).get("works") or []
+    return [f"{w['work']} → {w['topic']} ({w['fit']})" for w in works if w.get("fit") != "no"]
 
 
 def _row(doc: dict) -> list:
@@ -62,6 +68,7 @@ def _row(doc: dict) -> list:
         verdict.get("confidence", ""),
         counts["met"], counts["not_met"], counts["unclear"],
         _join(doc.get("eligibility_criteria")),
+        _join(_fits(doc)),
         _join(doc.get("judging_criteria")),
         _join(doc.get("application_requirements")),
         quotes,
@@ -91,6 +98,8 @@ def summary(rows: list[dict]) -> str:
         deadline = doc.get("submission_deadline") or doc.get("event_date") or "no date stated"
         score = verdict.get("score")
         fit = f"fit {score:.2f} ({verdict.get('confidence')})" if score is not None else "not yet judged"
+        if doc.get("fit"):
+            fit = f"fits our work: {len(_fits(doc))} line(s)"
         state = " — needs more evidence" if doc.get("record_state") == "needs_deeper_read" else ""
         lines += [
             f"* {doc.get('title')}{state}",

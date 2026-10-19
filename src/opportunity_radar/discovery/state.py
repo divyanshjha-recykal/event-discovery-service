@@ -21,6 +21,8 @@ class PlannedQuery:
     geography: str
     target_year: int
     rationale: str
+    #: The type's track this query serves; empty for a type without tracks.
+    track: str = ""
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,8 @@ class SearchHit:
     entry_status: str = ""
     #: The scholarly body or publisher behind a venue, as the page names it.
     sponsor: str = ""
+    #: The track of the query that found this result; empty for a type without tracks.
+    track: str = ""
     #: The provider's label: award, event, research, other, or "unrecognised".
     opportunity_type: str = ""
     #: The provider's summary exactly as returned, and whether it parsed:

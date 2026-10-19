@@ -115,6 +115,8 @@ async def state() -> dict:
     statuses = {"met": 0, "not_met": 0, "unclear": 0}
     for opp in opportunities:
         eligibility = opp.get("eligibility")
+        if opp.get("fit"):
+            continue
         if not eligibility:
             verdicts["unevaluated"] += 1
             continue
@@ -333,7 +335,10 @@ async def get_run_results(run_id: str) -> dict:
     saved: list[dict] = []
     seen_urls: set[str] = set()
     if ordered:
-        async for doc in _db[OPPORTUNITIES].find({"source_url": {"$in": ordered}}):
+        # Only this run's own writes: an older record on the same page is not this run's result.
+        async for doc in _db[OPPORTUNITIES].find(
+            {"source_url": {"$in": ordered}, "discovery_run_id": run_id}
+        ):
             saved.append(_jsonable(doc))
             seen_urls.add(doc["source_url"])
 
@@ -591,7 +596,8 @@ async def run_eligibility(request: EligibilityRequest, background: BackgroundTas
     async def _go() -> None:
         async for doc in _db[OPPORTUNITIES].find({}):
             criteria = doc.get("eligibility_criteria") or []
-            if not criteria or doc.get("eligibility"):
+            # shortcut: research venues are judged for fit only during a run; a failed fit is not retried here.
+            if not criteria or doc.get("eligibility") or doc.get("category") == "research":
                 continue
             try:
                 result = await asyncio.to_thread(

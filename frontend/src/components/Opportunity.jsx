@@ -1,6 +1,44 @@
-import { VERDICT, category } from '../api.js'
+import { FIT, VERDICT, category } from '../api.js'
 
 const List = ({ items }) => <ul className="plain">{items.map((x, i) => <li key={i}>{x}</li>)}</ul>
+
+/** Which of our work fits a research venue's call; shared with the journey. */
+export function FitTable({ fit }) {
+  const works = [...(fit?.works || [])].sort((a, b) => (FIT[a.fit]?.order ?? 3) - (FIT[b.fit]?.order ?? 3))
+  const matched = works.filter((w) => w.fit !== 'no')
+  return (
+    <>
+      {matched.length ? (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th style={{ width: '28%' }}>Our work</th>
+              <th style={{ width: 96 }}>Fit</th>
+              <th style={{ width: '28%' }}>Call topic</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {matched.map((w, i) => (
+              <tr key={i}>
+                <td>{w.work}</td>
+                <td><span className={`tag ${FIT[w.fit]?.cls || 'muted'}`}>{FIT[w.fit]?.label || w.fit}</span></td>
+                <td>{w.topic}</td>
+                <td className="why">{w.reason}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p className="muted small tight">None of our work matches this call's topics.</p>}
+      {works.length > matched.length && (
+        <p className="small muted tight">
+          Doesn't fit: {works.filter((w) => w.fit === 'no').map((w) => w.work).join(', ')}
+        </p>
+      )}
+      {fit?.venue_note && <p className="small tight">Venue: {fit.venue_note}</p>}
+    </>
+  )
+}
 
 export default function Opportunity({ o }) {
   const e = o.eligibility
@@ -36,8 +74,25 @@ export default function Opportunity({ o }) {
       {o.summary && <p className="tight">{o.summary}</p>}
       {o.why_pursued && <p className="small muted tight">Why it was pursued: {o.why_pursued}</p>}
 
+      {isResearch && (
+        <>
+          <div className="section-label">
+            Fits our work
+            {o.fit && <span className="muted"> — {(o.fit.works || []).filter((w) => w.fit !== 'no').length} of {(o.fit.works || []).length} lines of work</span>}
+          </div>
+          {o.fit ? <FitTable fit={o.fit} /> : <p className="muted small tight">Fit not judged yet.</p>}
+          {!!(o.eligibility_criteria || []).length && (
+            <>
+              <div className="section-label">Topics of interest</div>
+              <List items={o.eligibility_criteria} />
+            </>
+          )}
+        </>
+      )}
+
+      {!isResearch && <>
       <div className="section-label">
-        {isResearch ? 'Scope' : 'Eligibility'}
+        Eligibility
         {!!rows.length && (
           <span className="muted"> — {count('met')} met · {count('not_met')} not met · {count('unclear') + count('qualitative')} need review</span>
         )}
@@ -46,7 +101,7 @@ export default function Opportunity({ o }) {
         <table className="grid">
           <thead>
             <tr>
-              <th style={{ width: '42%' }}>{isResearch ? 'Topic' : 'Condition'}</th>
+              <th style={{ width: '42%' }}>Condition</th>
               <th style={{ width: 104 }}>Verdict</th>
               <th>Reason</th>
             </tr>
@@ -68,10 +123,11 @@ export default function Opportunity({ o }) {
             : 'The pages read state no conditions.'}
         </p>
       )}
+      </>}
 
       {!!(requirements.length || judging.length) && (
         <>
-          <div className="section-label">How to apply</div>
+          <div className="section-label">{isResearch ? 'How to submit' : 'How to apply'}</div>
           {!!requirements.length && <List items={requirements} />}
           {!!judging.length && (
             <>

@@ -16,7 +16,7 @@ export function opportunitiesCsv(saved) {
   const headers = [
     'title', 'organizing_body', 'base_title', 'cycle_year', 'category',
     'submission_deadline', 'deadline_verified', 'deadline_note', 'event_date',
-    'conditions_met', 'conditions_not_met', 'conditions_for_you_to_judge',
+    'conditions_met', 'conditions_not_met', 'conditions_for_you_to_judge', 'fits_our_work',
     'judging_criteria', 'application_requirements',
     'extraction_completeness', 'completeness_gaps', 'extractor_uncertainty',
     'source_url', 'evidence_urls',
@@ -29,11 +29,12 @@ export function opportunitiesCsv(saved) {
       ...pick('unclear'),
       ...(e?.qualitative_notes || []).map((n) => n.criterion),
     ]
+    const fits = (o.fit?.works || []).filter((w) => w.fit !== 'no').map((w) => `${w.work} → ${w.topic} (${w.fit})`)
     return [
       o.title, o.organizing_body, o.base_title, o.cycle_year, o.category,
       o.submission_deadline, o.submission_deadline ? String(!!o.deadline_verified) : '',
       o.deadline_note, o.event_date,
-      pick('met'), pick('not_met'), judge,
+      pick('met'), pick('not_met'), judge, fits,
       o.judging_criteria, o.application_requirements,
       o.extraction_completeness
         ? `${Math.round((o.extraction_completeness.score || 0) * 100)}%` : '',
@@ -54,6 +55,13 @@ export function conditionsCsv(saved) {
   const rows = []
   saved.forEach((o) => {
     const e = o.eligibility
+    if (o.fit) {
+      ;(o.fit.works || []).forEach((w) => {
+        rows.push([o.title, o.organizing_body, o.submission_deadline, w.work,
+                   w.fit, [w.topic, w.reason].filter(Boolean).join(' — '), o.source_url])
+      })
+      return
+    }
     if (!e) {
       ;(o.eligibility_criteria || []).forEach((c) => {
         rows.push([o.title, o.organizing_body, o.submission_deadline, c,
