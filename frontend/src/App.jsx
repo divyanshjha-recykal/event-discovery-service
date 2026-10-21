@@ -54,9 +54,15 @@ export default function App() {
   }, [busy, refresh])
 
   const start = async (path, dryRun) => {
+    // Only run buttons switch to the watch; re-evaluating stored records stays as it is.
+    const competitors = config.focus === 'competitors' && path !== '/api/eligibility'
+    if (competitors && dryRun) {
+      setError('Competitor watch has no dry run: every run searches live.')
+      return
+    }
     setBusy(true); setStopping(false); setError(null)
     try {
-      const res = await api(path, {
+      const res = await api(competitors ? '/api/competitors/runs' : path, {
         method: 'POST',
         body: JSON.stringify(toRequest(config, dryRun)),
       })

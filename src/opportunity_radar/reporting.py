@@ -19,6 +19,7 @@ import smtplib
 import ssl
 from datetime import date
 from email.message import EmailMessage
+from html import escape
 
 from .config import MissingConfig
 
@@ -111,6 +112,101 @@ def summary(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+SIGNAL_COLUMNS = ["Section", "Importance", "Company", "Kind", "Date", "Headline", "What happened",
+                  "Why it matters", "Link", "Also reported by"]
+TYPE_ORDER = (("award", "Awards"), ("grant", "Grants"), ("event", "Events"),
+              ("conference", "Conferences"), ("research", "Research"))
+
+# Inline styles only: mail clients drop <style> blocks and external CSS.
+_WRAP = ('<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.45;'
+         'color:#1f2328;max-width:680px">')
+_H1 = '<h1 style="font-size:20px;margin:0 0 4px">{}</h1>'
+_SUB = '<p style="color:#59636e;margin:0 0 18px">{}</p>'
+_H2 = ('<h2 style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:#59636e;'
+       'border-bottom:1px solid #d1d9e0;padding-bottom:4px;margin:22px 0 10px">{}</h2>')
+_ITEM = ('<div style="margin:0 0 14px"><a href="{url}" style="font-weight:bold;color:#0969da;'
+         'text-decoration:none">{title}</a><div style="font-size:12px;color:#59636e;margin:2px 0">{meta}</div>'
+         '<div>{body}</div></div>')
+_FOOT = '<p style="font-size:12px;color:#59636e;border-top:1px solid #d1d9e0;padding-top:8px;margin-top:22px">{}</p>'
+
+
+def _e(value) -> str:
+    return escape(str(value or ""), quote=True)
+
+
+def _page(title: str, sub: str, blocks: list[tuple[str, list[dict]]], foot: str) -> str:
+    """Email HTML: heading, then each block's items as linked title, meta line and body."""
+    parts = [_WRAP, _H1.format(_e(title)), _SUB.format(_e(sub))]
+    for heading, items in blocks:
+        parts.append(_H2.format(_e(heading)))
+        parts += [_ITEM.format(url=_e(i["url"]), title=_e(i["title"]), meta=_e(i["meta"]), body=_e(i["body"]))
+                  for i in items]
+    parts += [_FOOT.format(_e(foot)), "</div>"]
+    return "".join(parts)
+
+
+def _text(title: str, sub: str, blocks: list[tuple[str, list[dict]]], foot: str) -> str:
+    lines = [title, sub, ""]
+    for heading, items in blocks:
+        lines += [heading.upper(), ""]
+        for i in items:
+            lines += [f"* {i['title']}", f"  {i['meta']}", f"  {i['body']}", f"  {i['url']}", ""]
+    return "\n".join(lines + [foot])
+
+
+def opportunities_email(rows: list[dict], run_id: str) -> dict:
+    """Subject, plain text, HTML and CSV for one opportunity run, grouped by type."""
+    def item(doc: dict) -> dict:
+        verdict = doc.get("eligibility") or {}
+        deadline = (f"deadline {doc['submission_deadline']}" if doc.get("submission_deadline")
+                    else f"event {doc['event_date']}, no deadline stated" if doc.get("event_date")
+                    else "no deadline stated")
+        if doc.get("fit"):
+            fit = f"fits our work: {len(_fits(doc))} line(s)"
+        elif verdict.get("score") is not None:
+            fit = f"fit {verdict['score']:.2f} ({verdict.get('confidence')})"
+        else:
+            fit = "not yet judged"
+        state = " · needs more evidence" if doc.get("record_state") == "needs_deeper_read" else ""
+        return {"url": doc.get("source_url"), "title": doc.get("title"),
+                "meta": f"{doc.get('organizing_body')} · {deadline} · {fit}{state}",
+                "body": doc.get("summary") or ""}
+
+    blocks = [(label, [item(d) for d in rows if d.get("category") == key]) for key, label in TYPE_ORDER]
+    blocks.append(("Other", [item(d) for d in rows if d.get("category") not in dict(TYPE_ORDER)]))
+    blocks = [b for b in blocks if b[1]]
+    filename = f"opportunity-radar-{run_id[:6]}.csv"
+    args = (f"Opportunity Radar · {date.today():%d %b %Y}", f"{len(rows)} opportunit{'y' if len(rows) == 1 else 'ies'} from run {run_id[:6]}",
+            blocks, f"Entry conditions, fit and evidence pages for every opportunity are in the attached {filename}.")
+    return {"subject": f"{DEFAULT_SUBJECT} · {date.today():%d %b %Y}", "text": _text(*args), "html": _page(*args),
+            "csv": csv_bytes(rows), "filename": filename, "count": len(rows)}
+
+
+def signals_email(sections: list[dict], run: dict) -> dict:
+    """Subject, plain text, HTML and CSV for one competitor-watch run, by section."""
+    blocks = [(s["title"], [{"url": x["url"], "title": x["headline"], "body": x["what_happened"],
+                             "meta": f"{x['importance'].capitalize()} · {x['competitor']} · {x.get('date') or 'undated'}"}
+                            for x in s["signals"]]) for s in sections]
+    counts = run.get("counts") or {}
+    filename = f"competitor-watch-{run['run_id'][:6]}.csv"
+    sub = (f"{counts.get('signals', 0)} new signals · {counts.get('merged', 0)} added to known stories · "
+           f"window from {(run.get('budget') or {}).get('since', '?')}")
+    args = (f"Competitor watch · {date.today():%d %b %Y}", sub, blocks,
+            f"Every signal with why it matters and its other sources is in the attached {filename}."
+            if sections else "Nothing new since the last watch run.")
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(SIGNAL_COLUMNS)
+    for s in sections:
+        for x in s["signals"]:
+            writer.writerow([s["title"], x["importance"], x["competitor"], x["kind"], x.get("date") or "",
+                             x["headline"], x["what_happened"], x["why_it_matters"], x["url"],
+                             _join(x.get("also_reported_by"))])
+    return {"subject": f"Competitor watch · {date.today():%d %b %Y}", "text": _text(*args), "html": _page(*args),
+            "csv": buffer.getvalue().encode("utf-8-sig"), "filename": filename,
+            "count": sum(len(s["signals"]) for s in sections)}
+
+
 def configured_recipients() -> list[str]:
     return [a.strip() for a in os.getenv("SMTP_TO", "").split(",") if a.strip()]
 
@@ -118,7 +214,13 @@ def configured_recipients() -> list[str]:
 def send_report(
     to: list[str], rows: list[dict], filename: str, subject: str = DEFAULT_SUBJECT
 ) -> None:
-    """Mail the rows as a CSV attachment with a plain-text summary. Raises on failure."""
+    """Mail opportunity rows with a readable body and the CSV attached. Raises on failure."""
+    mail = opportunities_email(rows, rows[0].get("discovery_run_id") or "")
+    send_mail(to, {**mail, "subject": subject, "filename": filename})
+
+
+def send_mail(to: list[str], mail: dict) -> None:
+    """Send an email built by opportunities_email or signals_email. Raises on failure."""
     host = os.getenv("SMTP_HOST")
     sender = os.getenv("SMTP_FROM") or os.getenv("SMTP_USERNAME")
     if not host or not sender:
@@ -128,13 +230,12 @@ def send_report(
     port = int(os.getenv("SMTP_PORT") or (465 if os.getenv("SMTP_SSL") else 587))
 
     message = EmailMessage()
-    message["Subject"] = subject
+    message["Subject"] = mail["subject"]
     message["From"] = sender
     message["To"] = ", ".join(to)
-    message.set_content(summary(rows))
-    message.add_attachment(
-        csv_bytes(rows), maintype="text", subtype="csv", filename=filename,
-    )
+    message.set_content(mail["text"])
+    message.add_alternative(mail["html"], subtype="html")
+    message.add_attachment(mail["csv"], maintype="text", subtype="csv", filename=mail["filename"])
 
     context = ssl.create_default_context()
     username, password = os.getenv("SMTP_USERNAME"), os.getenv("SMTP_PASSWORD")

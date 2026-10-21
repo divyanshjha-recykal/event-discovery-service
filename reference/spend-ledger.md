@@ -19,3 +19,8 @@ each provider's dashboard.
 | 2026-10-13 | Run 0d4823 — Awards | 5 | 12 pages | 16 model calls | — | check dashboard |
 | 2026-10-16 | rank_pool A/B: 3 saved pools × with/without the stored-programme lines in the prompt | 0 | 0 | 6 model calls | — | — |
 | 2026-10-16 | R0: Exa publication-index test (3 paper sketches) | 3 (category publication, 10 results) | 0 | 1 model call | — | — |
+| 2026-10-20 | Competitor watch live test 1 (run f165a8, 3 competitors, test DB) | 14 (highlights + text) | 0 | ~8 model calls | — | — |
+| 2026-10-20 | Competitor watch live test 2 after fixes (run 617d7f, --since 2026-07-22, test DB) | 14 | 0 | ~4 model calls | — | — |
+| 2026-10-20 | Run 727121 — Competitor watch, first UI run (all 11 competitors); deleted 21 Oct | 30 (highlights + text) | 0 | ~11 model calls | — | check dashboard |
+| 2026-10-21 | Model-written digest attempts on run 727121 (approach dropped) | 0 | 0 | 5 model calls (~$0.02) | — | — |
+| 2026-10-21 | Run cb25a6 — Competitor watch, UI run (all 11 competitors); deleted for baseline | 30 (highlights + text) | 0 | 10 model calls | — | check dashboard |

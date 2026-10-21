@@ -11,7 +11,9 @@ stage plan. Read it before changing anything.
 
 ```bash
 cp .env.example .env       # then fill it in — nothing runs without it
-docker compose up -d       # MongoDB + self-hosted Langfuse
+docker compose up -d       # MongoDB
+docker compose -f docker-compose.langfuse.yml up -d      # optional: tracing, kept only while it runs
+docker compose -f docker-compose.langfuse.yml down -v    # stop tracing and wipe its data
 uv sync
 ```
 

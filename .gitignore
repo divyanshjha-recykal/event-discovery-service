@@ -24,3 +24,6 @@ opportunities.csv
 docs/*.xlsx
 # Product profiles hold internal costs; never commit
 docs/products/
+
+# Local database backups
+backups/

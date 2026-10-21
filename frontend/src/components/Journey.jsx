@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { outcome as outcomeOf, VERDICT } from '../api.js'
 import { IconChevron, IconDot, IconExternal, TOOL_ICON } from '../icons.jsx'
 import Opportunity, { FitTable } from './Opportunity.jsx'
+import { Digest } from './Signals.jsx'
 
 const BAD = new Set(['failed', 'insufficient'])
 const WARN = new Set(['fallback', 'no_new_evidence', 'partial'])
@@ -26,6 +27,13 @@ const NODE = {
   store: ['Store', 'Saves the records.'],
 }
 
+// A competitor-watch run's steps, worded for what they do there.
+const WATCH_NODE = {
+  plan: ['Plan', 'Writes the market searches from the business profile.'],
+  search: ['Search', "Searches each competitor's site, the market and each competitor's name for pages published since the last run, then skips pages judged before."],
+  evaluate: ['Judge', 'Decides which new pages report something that happened, who it concerns and how much it matters, and links follow-ups to known stories.'],
+}
+
 // Shown inside the step they belong to, not as steps of their own.
 const DROP = new Set(['dedupe', 'expired'])
 const RECORD = new Set(['extract', 'actionability', 'grounding'])
@@ -45,6 +53,8 @@ const STEP_NAME = {
   actionability: 'Check if live',
   feasibility: 'Judge conditions',
   fit: 'Judge fit',
+  seen: 'Skip seen pages',
+  judge: 'Judge signals',
   save_opportunity: 'Store',
 }
 
@@ -110,14 +120,17 @@ function SearchBody({ e, followed = [] }) {
       {!rows.length && <p className="muted small tight">No results.</p>}
       {!!rows.length && (
         <table className="grid">
-          <thead><tr><th style={{ width: '28%' }}>Title</th><th style={{ width: 200 }}>Link</th><th style={{ width: 90 }}>Type</th><th>Snippet</th></tr></thead>
+          <thead><tr><th style={{ width: '28%' }}>Title</th><th style={{ width: 200 }}>Link</th>
+            {e.lane ? <th>Published</th> : <><th style={{ width: 90 }}>Type</th><th>Snippet</th></>}</tr></thead>
           <tbody>
             {rows.map((r) => [
               <tr key={r.url} className="clickable" onClick={() => setOpen(open === r.url ? null : r.url)}>
                 <td>{r.title}</td>
                 <td><Url href={r.url}>{r.url.replace(/^https?:\/\//, '').slice(0, 42)}</Url></td>
-                <td>{r.opportunity_type ? <span className="tag muted">{r.opportunity_type}</span> : <span className="muted small">—</span>}</td>
-                <td className="why clamp">{r.snippet}</td>
+                {e.lane ? <td className="small muted">{r.published_date || 'undated'}</td> : <>
+                  <td>{r.opportunity_type ? <span className="tag muted">{r.opportunity_type}</span> : <span className="muted small">—</span>}</td>
+                  <td className="why clamp">{r.snippet}</td>
+                </>}
               </tr>,
               open === r.url && (
                 <tr key={`${r.url}-detail`}>
@@ -445,6 +458,41 @@ function FitBody({ e }) {
   )
 }
 
+function JudgeBody({ e }) {
+  if (e.outcome !== 'ok') return <p className="err small tight">{e.detail}</p>
+  const kept = e.kept || []
+  const excluded = e.excluded || []
+  return (
+    <>
+      {!!kept.length && (
+        <table className="grid">
+          <thead>
+            <tr><th style={{ width: 80 }}>Importance</th><th style={{ width: '22%' }}>About</th><th>Headline</th><th style={{ width: 180 }}>Link</th></tr>
+          </thead>
+          <tbody>
+            {kept.map((k, i) => (
+              <tr key={i}>
+                <td className="small">{k.merged_into ? 'added to a known story' : k.importance}</td>
+                <td>{k.competitor}</td>
+                <td>{k.headline}</td>
+                <td><Url href={k.url}>{k.url.replace(/^https?:\/\//, '').slice(0, 34)}</Url></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {!!excluded.length && (
+        <details className="raw">
+          <summary className="small muted">Dropped ({excluded.length}) — the judge's reasons</summary>
+          {excluded.map((x, i) => (
+            <p key={i} className="small tight"><Url href={x.url}>{x.title || x.url}</Url> — <span className="why">{x.reason}</span></p>
+          ))}
+        </details>
+      )}
+    </>
+  )
+}
+
 function ExtractBody({ e }) {
   if (e.outcome !== 'ok') {
     return (
@@ -511,6 +559,7 @@ const BODY = {
   extract: ExtractBody,
   feasibility: EvaluateBody,
   fit: FitBody,
+  judge: JudgeBody,
 }
 
 /* ------------------------------------------------------------------ step */
@@ -525,7 +574,7 @@ function headline(e) {
     case 'search': {
       const n = (e.results || []).length
       const fit = e.on_type != null ? ` · ${e.on_type} of ${n} on-type` : ''
-      return `${e.query} · ${plural(n, 'result', 'results')}${fit}`
+      return `${e.lane ? `[${e.lane}] ` : ''}${e.query} · ${plural(n, 'result', 'results')}${fit}`
     }
     case 'shortlist': {
       if (e.outcome !== 'ok') return 'selection failed'
@@ -556,6 +605,12 @@ function headline(e) {
       return f.length ? `${found} of ${f.length} quoted from the page` : 'nothing to check'
     }
     case 'memory': return e.detail
+    case 'seen': return e.detail
+    case 'judge': {
+      if (e.outcome !== 'ok') return 'judging failed'
+      const kept = e.kept || []
+      return `${kept.length} kept of ${e.considered} new pages · ${kept.filter((k) => k.merged_into).length} added to known stories`
+    }
     case 'fit': {
       if (e.outcome !== 'ok') return `${e.title || ''} — fit check failed`
       const works = e.works || []
@@ -600,7 +655,7 @@ function Step({ e, followed, all, expandAll, expandEpoch }) {
 
 /* ------------------------------------------------------------ final output */
 
-function FinalOutput({ saved, totals, live }) {
+function FinalOutput({ saved, totals, live, watch, counts = {}, runId }) {
   if (live) {
     return (
       <section className="pass final pending">
@@ -608,6 +663,23 @@ function FinalOutput({ saved, totals, live }) {
           <span className="pass-name">Result</span>
           <span className="small muted">available when the run finishes</span>
           <span className="spacer" /><span className="working-dot" />
+        </div>
+      </section>
+    )
+  }
+  if (watch) {
+    return (
+      <section className="pass final">
+        <div className="pass-head static">
+          <span className="pass-name">Result</span>
+          <span className="spacer" />
+          <span className="small muted mono">
+            {counts.signals ?? 0} new signals · {counts.merged ?? 0} added to known stories ·{' '}
+            {counts.context ?? 0} low-relevance context · {counts.dropped ?? 0} dropped
+          </span>
+        </div>
+        <div className="pass-body">
+          <Digest runId={runId} count={counts.signals} />
         </div>
       </section>
     )
@@ -690,10 +762,10 @@ function nestPages(events) {
   }
 }
 
-function StagePass({ pass, all, expandAll, expandEpoch, live, isLast }) {
+function StagePass({ pass, all, expandAll, expandEpoch, live, isLast, nodes = NODE }) {
   const [open, setOpen] = useState(isLast)
   useExpandAll(expandEpoch, () => setOpen(expandAll))
-  const [title, purpose] = NODE[pass.node] || [pass.node, '']
+  const [title, purpose] = nodes[pass.node] || NODE[pass.node] || [pass.node, '']
   const { visible, followedBy } = useMemo(() => nestPages(pass.events), [pass.events])
   const problems = pass.events.filter((e) => toneOf(e) === 'bad').length
   const span = Math.max(0, pass.events[pass.events.length - 1].t - (pass.prevEnd ?? 0))
@@ -769,11 +841,13 @@ export default function Journey({ run, events = [], saved = [], totals, live = f
       {passes.map((pass, i) => (
         <StagePass key={`${pass.node}-${pass.ordinal}`} pass={pass} all={events}
                    expandAll={expand.on} expandEpoch={expand.epoch}
-                   live={live} isLast={i === passes.length - 1} />
+                   live={live} isLast={i === passes.length - 1}
+                   nodes={run?.budget?.focus === 'competitors' ? WATCH_NODE : NODE} />
       ))}
       {!passes.length && <p className="muted tight">No problem steps in this run.</p>}
 
-      <FinalOutput saved={saved} totals={totals} live={live} />
+      <FinalOutput saved={saved} totals={totals} live={live}
+                   watch={run?.budget?.focus === 'competitors'} counts={run?.counts} runId={run?.run_id} />
 
       {run.trace_url && (
         <p className="small" style={{ marginTop: 12 }}>

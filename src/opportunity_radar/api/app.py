@@ -34,10 +34,11 @@ from ..discovery.budget import (
     DEFAULT_TOOL_CALLS,
     DEFAULT_WALL_CLOCK_SECONDS,
 )
+from ..discovery import competitor_watch as cw
 from ..eligibility import evaluate_criteria
 from ..paths import REPO_ROOT
 from ..profile import load_business_profile
-from ..reporting import configured_recipients, send_report
+from ..reporting import configured_recipients, opportunities_email, send_mail, signals_email
 from ..storage import (
     EXTRACTION_FAILURES,
     OPPORTUNITIES,
@@ -379,24 +380,41 @@ async def mail_settings() -> dict:
     return {"to": configured_recipients()}
 
 
-@app.post("/api/runs/{run_id}/email")
-async def email_run(run_id: str) -> dict:
-    """Mail one run's saved opportunities as a CSV to the SMTP_TO recipients."""
-    to = configured_recipients()
-    if not to:
-        raise HTTPException(status_code=400, detail="SMTP_TO is not set in .env")
+async def _run_email(run_id: str) -> dict:
+    """The email for one run: its digest for a competitor run, its opportunities otherwise."""
+    run = await _db[RUNS].find_one({"run_id": run_id}, {"run_id": 1, "counts": 1, "budget": 1})
+    if not run:
+        raise HTTPException(status_code=404, detail=f"no run {run_id}")
+    if (run.get("budget") or {}).get("focus") == cw.FOCUS:
+        return signals_email(await cw.run_digest(_db, run_id), run)
     rows = (await get_run_results(run_id))["saved"]
     if not rows:
         raise HTTPException(status_code=400, detail="this run saved no opportunities")
+    return opportunities_email(rows, run_id)
+
+
+@app.get("/api/runs/{run_id}/email")
+async def preview_run_email(run_id: str) -> dict:
+    """Exactly what the email for this run would contain, and who it would go to."""
+    mail = await _run_email(run_id)
+    return {"to": configured_recipients(), "subject": mail["subject"], "html": mail["html"],
+            "csv": mail["csv"].decode("utf-8-sig"), "filename": mail["filename"], "count": mail["count"]}
+
+
+@app.post("/api/runs/{run_id}/email")
+async def email_run(run_id: str) -> dict:
+    """Mail one run's email (readable body, CSV attached) to the SMTP_TO recipients."""
+    to = configured_recipients()
+    if not to:
+        raise HTTPException(status_code=400, detail="SMTP_TO is not set in .env")
+    mail = await _run_email(run_id)
     try:
-        await asyncio.to_thread(
-            send_report, to, rows, f"opportunity-radar-{run_id[:6]}.csv",
-        )
+        await asyncio.to_thread(send_mail, to, mail)
     except Exception as exc:  # noqa: BLE001 — shown to the user as-is
         raise HTTPException(
             status_code=502, detail=f"{type(exc).__name__}: {exc}"[:500]
         ) from exc
-    return {"sent_to": to, "count": len(rows)}
+    return {"sent_to": to, "count": mail["count"]}
 
 
 # Budgets of runs currently in flight, so /stop can cancel one. A cancelled
@@ -544,6 +562,39 @@ async def get_run_detail(run_id: str) -> dict:
 
 
 RunRequest = RunConfig
+
+
+class CompetitorRunRequest(BaseModel):
+    """Only the model matters to a competitor run; other sidebar settings are ignored."""
+
+    model: str | None = None
+
+
+@app.post("/api/competitors/runs")
+async def start_competitor_watch(request: CompetitorRunRequest, background: BackgroundTasks) -> dict:
+    """Trigger one competitor-watch run; the list is checked first so a bad sheet fails here, not mid-run."""
+    try:
+        cw.load_competitors()
+    except cw.CompetitorListError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    run_id = uuid4().hex
+    budget = RunBudget(tool_calls=80, max_searches=40, max_llm_calls=15)
+
+    async def _go() -> None:
+        _ACTIVE[run_id] = budget
+        try:
+            await cw.run_competitor_watch(_db, model=request.model or None, run_id=run_id, budget=budget)
+        finally:
+            _ACTIVE.pop(run_id, None)
+
+    background.add_task(_go)
+    return {"run_id": run_id, "status": "running"}
+
+
+@app.get("/api/runs/{run_id}/signals")
+async def get_run_signals(run_id: str) -> dict:
+    """A competitor run's signals by section, most important first, then earlier stories it updated."""
+    return {"sections": _jsonable(await cw.run_digest(_db, run_id))}
 
 
 @app.post("/api/runs")

@@ -4,24 +4,25 @@ import { api, category as categoryOf, outcome as outcomeOf, runLabel, runStatus,
 import { IconExternal, IconStop } from '../icons.jsx'
 import ExportPanel from './ExportPanel.jsx'
 import Journey from './Journey.jsx'
+import Signals from './Signals.jsx'
 import Opportunity from './Opportunity.jsx'
 
-function Stages({ run, events }) {
+function Stages({ run, events, stages = STAGES, labels = stages }) {
   const reached = new Set(events.map((e) => STAGE_OF[e.tool]).filter(Boolean))
   const running = run?.status === 'running'
   let current = -1
-  STAGES.forEach((s, i) => { if (reached.has(s)) current = i })
+  stages.forEach((s, i) => { if (reached.has(s)) current = i })
 
   return (
     <div className="stages">
-      {STAGES.map((stage, i) => {
+      {stages.map((stage, i) => {
         const done = running ? i < current : reached.has(stage)
         const active = running && i === current
         return (
           <span key={stage} className="stage-wrap">
             {i > 0 && <span className="stage-arrow" />}
             <span className={`stage${done ? ' done' : ''}${active ? ' active' : ''}`}>
-              {stage}
+              {labels[i]}
             </span>
           </span>
         )
@@ -139,7 +140,7 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
       if (meta.status !== 'running') {
         // Eligibility runs after discovery returns, so keep polling briefly
         // until it reports in rather than calling the run done too early.
-        if (meta.eligibility_done !== undefined || settled.current++ > 12) {
+        if (meta.eligibility_done !== undefined || meta.budget?.focus === 'competitors' || settled.current++ > 12) {
           clearInterval(timer)
           await loadResults()
           onRunFinished?.()
@@ -158,6 +159,7 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
   const running = run.status === 'running'
   const b = run.budget || {}
   const counts = run.counts || {}
+  const watch = b.focus === 'competitors'
   const saved = results?.saved || []
   // One source of truth. The header used to count save operations while the
   // tabs counted stored records, so a run showed "5 ready" above "Results (3)".
@@ -189,10 +191,22 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
             <span className="mono small muted">{shortId(run.run_id)}</span>
           </div>
           <div className="row small muted" style={{ marginTop: 4 }}>
-            <span>{totals.ready} ready</span>
-            <span>{totals.needs_deeper} need a deeper read</span>
-            <span>{totals.set_aside} set aside</span>
-            {b.elapsed != null && <span>{Math.round(b.elapsed)}s in discovery</span>}
+            {watch ? (
+              <>
+                <span>{counts.signals ?? 0} new signals</span>
+                <span>{counts.merged ?? 0} added to known stories</span>
+                <span>{counts.context ?? 0} low-relevance context</span>
+                <span>{counts.dropped ?? 0} dropped</span>
+                {b.since && <span>since {b.since}</span>}
+              </>
+            ) : (
+              <>
+                <span>{totals.ready} ready</span>
+                <span>{totals.needs_deeper} need a deeper read</span>
+                <span>{totals.set_aside} set aside</span>
+              </>
+            )}
+            {b.elapsed != null && <span>{Math.round(b.elapsed)}s{watch ? '' : ' in discovery'}</span>}
             {/* Wall time covers eligibility too, which runs after the budget stops. */}
             {run.finished_at && run.started_at && (
               <span>
@@ -221,16 +235,18 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
       </div>
 
       {exporting && (
-        <ExportPanel runId={runId} saved={saved} events={events}
+        <ExportPanel runId={runId} saved={saved} events={events} watch={watch}
                      onClose={() => setExporting(false)} />
       )}
 
       <div className="card">
-        <Stages run={run} events={events} />
+        {watch
+          ? <Stages run={run} events={events} stages={['plan', 'search', 'evaluate']} labels={['plan', 'search', 'judge']} />
+          : <Stages run={run} events={events} />}
         <div className="meters">
           <Meter label="tool calls" used={b.spent ?? 0} cap={b.tool_calls ?? 0} />
           <Meter label="searches" used={b.searches ?? counts.searched ?? 0} cap={b.max_searches ?? 0} />
-          <Meter label="scrapes" used={b.scrapes ?? counts.scraped ?? 0} cap={b.max_scrapes ?? 0} />
+          {!watch && <Meter label="scrapes" used={b.scrapes ?? counts.scraped ?? 0} cap={b.max_scrapes ?? 0} />}
           <Meter label="model calls" used={b.llm_calls ?? 0} cap={b.max_llm_calls ?? 0} />
         </div>
         {b.stop_reason && (
@@ -246,11 +262,14 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
       </div>
 
       <div className="tabs">
-        {[
+        {(watch ? [
+          ['journey', `Journey (${events.length})`],
+          ['signals', `Signals (${counts.signals ?? 0})`],
+        ] : [
           ['journey', `Journey (${events.length})`],
           ['opportunities', `Results (${totals.ready + totals.needs_deeper})`],
           ['aside', `Set aside (${totals.set_aside})`],
-        ].map(([key, label]) => (
+        ]).map(([key, label]) => (
           <button key={key} type="button"
                   className={`tab${tab === key ? ' on' : ''}`}
                   onClick={() => setTab(key)}>
@@ -306,6 +325,8 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
         )}
 
         {tab === 'aside' && <SetAside results={results} />}
+
+        {tab === 'signals' && <Signals runId={runId} count={counts.signals} live={running} />}
       </div>
     </>
   )

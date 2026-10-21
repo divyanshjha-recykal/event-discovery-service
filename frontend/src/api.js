@@ -51,6 +51,7 @@ export const FOCUS = [
   ['award', 'Awards', 'Prizes, rankings and honours we could be entered for.'],
   ['event', 'Events', 'Conferences, summits, forums and expos.'],
   ['research', 'Research', 'Peer-reviewed papers, industry tracks, workshops and challenge tracks at established conferences.'],
+  ['competitors', 'Competitors', 'Competitor moves, market news and tenders since the last watch run.'],
 ]
 
 /** What kind of opportunity a stored record is. */
@@ -102,6 +103,8 @@ export const STAGE_OF = {
   skip: 'extract',
   feasibility: 'evaluate',
   fit: 'evaluate',
+  judge: 'evaluate',
+  seen: 'search',
   save_opportunity: 'store',
 }
 
