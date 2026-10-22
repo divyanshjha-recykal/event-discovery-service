@@ -35,10 +35,12 @@ from ..discovery.budget import (
     DEFAULT_WALL_CLOCK_SECONDS,
 )
 from ..discovery import competitor_watch as cw
+from ..discovery import component_watch as cmw
 from ..eligibility import evaluate_criteria
 from ..paths import REPO_ROOT
 from ..profile import load_business_profile
-from ..reporting import configured_recipients, opportunities_email, send_mail, signals_email
+from ..product_profile import ProductProfileError, load_product_profile, machines
+from ..reporting import components_email, configured_recipients, opportunities_email, send_mail, signals_email
 from ..storage import (
     EXTRACTION_FAILURES,
     OPPORTUNITIES,
@@ -306,7 +308,8 @@ async def delete_run(run_id: str) -> dict:
 
     Deliberately does not touch `opportunities` or `programs`: a record is
     upserted on its own identity and may have been confirmed by later runs, so
-    deleting a run must not delete findings that outlived it.
+    deleting a run must not delete findings that outlived it. Component findings
+    belong to one run only, so they go with it.
     """
     if run_id in _ACTIVE:
         raise HTTPException(
@@ -316,7 +319,8 @@ async def delete_run(run_id: str) -> dict:
     result = await _db[RUNS].delete_one({"run_id": run_id})
     if not result.deleted_count:
         raise HTTPException(status_code=404, detail=f"no run {run_id}")
-    return {"run_id": run_id, "deleted": True}
+    offers = await _db[cmw.OFFERS].delete_many({"run_id": run_id})
+    return {"run_id": run_id, "deleted": True, "component_findings_deleted": offers.deleted_count}
 
 
 @app.get("/api/runs/{run_id}/results")
@@ -385,8 +389,14 @@ async def _run_email(run_id: str) -> dict:
     run = await _db[RUNS].find_one({"run_id": run_id}, {"run_id": 1, "counts": 1, "budget": 1})
     if not run:
         raise HTTPException(status_code=404, detail=f"no run {run_id}")
-    if (run.get("budget") or {}).get("focus") == cw.FOCUS:
+    focus = (run.get("budget") or {}).get("focus")
+    if focus == cw.FOCUS:
         return signals_email(await cw.run_digest(_db, run_id), run)
+    if focus == cmw.FOCUS:
+        try:
+            return components_email(await cmw.run_offers(_db, run_id), run)
+        except cmw.OutdatedRunError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     rows = (await get_run_results(run_id))["saved"]
     if not rows:
         raise HTTPException(status_code=400, detail="this run saved no opportunities")
@@ -589,6 +599,72 @@ async def start_competitor_watch(request: CompetitorRunRequest, background: Back
 
     background.add_task(_go)
     return {"run_id": run_id, "status": "running"}
+
+
+class ComponentRunRequest(BaseModel):
+    """Which product's parts to check, and with which model."""
+
+    product: str = "ace"
+    model: str | None = None
+    only: list[str] | None = None
+    #: "priority": the parts that make up 80% of off-the-shelf spend (weekly); "all": every part.
+    scope: Literal["priority", "all"] = "priority"
+
+
+@app.post("/api/components/runs")
+async def start_component_watch(request: ComponentRunRequest, background: BackgroundTasks) -> dict:
+    """Trigger one component-watch run; the workbook is checked first so a bad sheet fails here, not mid-run."""
+    try:
+        load_product_profile(request.product)
+    except ProductProfileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    run_id = uuid4().hex
+    budget = RunBudget(tool_calls=240, max_searches=150, max_llm_calls=80)
+
+    async def _go() -> None:
+        _ACTIVE[run_id] = budget
+        try:
+            await cmw.run_component_watch(_db, request.product, model=request.model or None, run_id=run_id,
+                                          budget=budget, only=request.only or None, scope=request.scope)
+        finally:
+            _ACTIVE.pop(run_id, None)
+
+    background.add_task(_go)
+    return {"run_id": run_id, "status": "running"}
+
+
+@app.get("/api/components/machines")
+async def list_machines() -> dict:
+    """The product line, and which machines have a product workbook to run on."""
+    try:
+        return {"machines": machines()}
+    except ProductProfileError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class OfferCheck(BaseModel):
+    """Procurement's verdict on one finding after asking the seller."""
+
+    check: Literal["holds", "does not hold", ""]
+    note: str = ""
+
+
+@app.patch("/api/components/offers/{offer_id}")
+async def check_offer(offer_id: str, body: OfferCheck) -> dict:
+    """Record whether a finding held up when procurement asked the seller (same part, that price, in stock)."""
+    try:
+        return await cmw.record_check(_db, offer_id, body.check, body.note)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"no finding {offer_id}") from exc
+
+
+@app.get("/api/runs/{run_id}/components")
+async def get_run_components(run_id: str) -> dict:
+    """A component run's findings by part, plus custom parts and parts with nothing found."""
+    try:
+        return _jsonable(await cmw.run_offers(_db, run_id))
+    except cmw.OutdatedRunError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/runs/{run_id}/signals")

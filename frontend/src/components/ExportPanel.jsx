@@ -15,9 +15,16 @@ const WATCH_SHEETS = [
   ['email', 'Email preview', 'Exactly what the email will show; the signals CSV is attached.'],
   ['journey', 'Run log', 'One row per step the agent took, for an audit trail.'],
 ]
+const PART_SHEETS = [
+  ['findings', 'Findings', 'One row per finding: effort, price before GST, difference vs our rate, must-have checks.'],
+  ['email', 'Email preview', 'Exactly what the email will show; the findings CSV is attached.'],
+  ['journey', 'Run log', 'One row per step the agent took, for an audit trail.'],
+]
+// The server builds these sheets, so the download matches the email attachment.
+const SERVER_SHEETS = new Set(['signals', 'findings'])
 
-export default function ExportPanel({ runId, saved, events, watch, onClose }) {
-  const sheets = watch ? WATCH_SHEETS : OPPORTUNITY_SHEETS
+export default function ExportPanel({ runId, saved, events, kind = 'opportunities', onClose }) {
+  const sheets = { competitors: WATCH_SHEETS, components: PART_SHEETS }[kind] || OPPORTUNITY_SHEETS
   const [sheet, setSheet] = useState(sheets[0][0])
   const [copied, setCopied] = useState(false)
   // The server builds the email and the signals CSV, so the preview is what is sent.
@@ -40,7 +47,7 @@ export default function ExportPanel({ runId, saved, events, watch, onClose }) {
   }
 
   const csv = useMemo(() => {
-    if (sheet === 'signals') return preview?.csv || ''
+    if (SERVER_SHEETS.has(sheet)) return preview?.csv || ''
     if (sheet === 'conditions') return conditionsCsv(saved)
     if (sheet === 'journey') return journeyCsv(events)
     if (sheet === 'opportunities') return opportunitiesCsv(saved)
@@ -48,7 +55,7 @@ export default function ExportPanel({ runId, saved, events, watch, onClose }) {
   }, [sheet, saved, events, preview])
 
   const rows = csv ? csv.trim().split(/\r?\n/).length - 1 : 0
-  const filename = sheet === 'signals' && preview ? preview.filename
+  const filename = SERVER_SHEETS.has(sheet) && preview ? preview.filename
     : `opportunity-radar-${sheet}-${shortId(runId)}.csv`
   const mailTo = preview?.to || []
 
@@ -114,7 +121,7 @@ export default function ExportPanel({ runId, saved, events, watch, onClose }) {
           {preview && !!mailTo.length && (
             <>
               <p className="small muted tight">
-                A readable summary of {preview.count} {watch ? 'signal(s)' : 'opportunit(ies)'} in the email body, with {preview.filename} attached.
+                A readable summary of {preview.count} {{ competitors: 'signal(s)', components: 'finding(s)' }[kind] || 'opportunit(ies)'} in the email body, with {preview.filename} attached.
               </p>
               <div className="row" style={{ marginTop: 8 }}>
                 {mail.step === 'confirm' ? (

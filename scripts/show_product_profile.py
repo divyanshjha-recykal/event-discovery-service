@@ -1,4 +1,4 @@
-"""Load a product profile workbook and show what component discovery will search.
+"""Load a product profile workbook and show what the component pipeline will see.
 
     uv run python scripts/show_product_profile.py ace
 
@@ -26,16 +26,15 @@ def main() -> int:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1
 
-    print(f"{profile.product}: {len(profile.parts)} parts from {profile.path}")
-    print("  by subsystem:", dict(Counter(p.subsystem for p in profile.parts)))
-    print("  priced:", sum(1 for p in profile.parts if p.rate is not None),
-          "| specs documented:", sum(1 for p in profile.parts if p.must_have),
-          "| specs not documented:", sum(1 for p in profile.parts if p.baseline_from_datasheet))
-    searchable = profile.searchable()
-    print(f"\nSEARCH = yes ({len(searchable)}):")
-    for part in searchable:
-        print(f"\n[{part.part_id}] {part.subsystem}")
-        print("  " + part.brief().replace("\n", "\n  "))
+    parts = profile.parts
+    print(f"{profile.product}: {len(parts)} parts from {profile.path}")
+    print("  by subsystem:", dict(Counter(p.subsystem for p in parts)))
+    print("  priced:", sum(1 for p in parts if p.rate is not None),
+          "| with a part number:", sum(1 for p in parts if p.part_number),
+          "| with a vendor:", sum(1 for p in parts if p.vendor),
+          "| with a reason:", sum(1 for p in parts if p.why_chosen))
+    for part in parts:
+        print(f"\n[{part.part_id}] {part.subsystem}\n  " + part.brief().replace("\n", "\n  "))
     return 0
 
 

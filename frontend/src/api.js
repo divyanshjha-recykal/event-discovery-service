@@ -52,6 +52,7 @@ export const FOCUS = [
   ['event', 'Events', 'Conferences, summits, forums and expos.'],
   ['research', 'Research', 'Peer-reviewed papers, industry tracks, workshops and challenge tracks at established conferences.'],
   ['competitors', 'Competitors', 'Competitor moves, market news and tenders since the last watch run.'],
+  ['components', 'Components', 'Every ACE part: the same part from other sellers, and replacements, judged on effort and price.'],
 ]
 
 /** What kind of opportunity a stored record is. */
@@ -104,6 +105,7 @@ export const STAGE_OF = {
   feasibility: 'evaluate',
   fit: 'evaluate',
   judge: 'evaluate',
+  assess: 'evaluate',
   seen: 'search',
   save_opportunity: 'store',
 }
@@ -131,6 +133,9 @@ export const DEFAULT_CONFIG = {
   focus: 'any',
   search_provider: 'exa',
   queries: '',
+  // Component runs: 'priority' searches the parts making up 80% of off-the-shelf spend.
+  component_scope: 'priority',
+  component_product: 'ace',
 }
 
 const CONFIG_KEY = 'or-config-v2'

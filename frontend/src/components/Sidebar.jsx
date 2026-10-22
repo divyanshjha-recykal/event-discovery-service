@@ -1,6 +1,32 @@
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { DEFAULT_CONFIG, FOCUS, SEARCH_PROVIDERS, estimateCalls, runLabel, runStatus, runTrack, shortId } from '../api.js'
+import { DEFAULT_CONFIG, FOCUS, SEARCH_PROVIDERS, api, estimateCalls, runLabel, runStatus, runTrack, shortId } from '../api.js'
+
+/** The product line; a machine can be chosen once its product workbook exists. */
+function MachinePicker({ config, setConfig }) {
+  const [list, setList] = useState(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    api('/api/components/machines').then((d) => setList(d.machines)).catch((e) => setError(e.message))
+  }, [])
+  if (error) return <p className="err small">{error}</p>
+  if (!list) return <p className="hint">Loading machines…</p>
+  const chosen = config.component_product || 'ace'
+  return (
+    <div className="focus-picker">
+      {list.map((m) => (
+        <button key={m.key} type="button" disabled={!m.available}
+                title={m.available ? `Run on ${m.name}'s parts` : `No product workbook yet: add ${m.workbook}`}
+                className={`focus-opt${chosen === m.key ? ' on' : ''}`}
+                onClick={() => setConfig({ ...config, component_product: m.key })}>
+          {m.name}
+        </button>
+      ))}
+    </div>
+  )
+}
 import { IconChevron, IconMoon, IconPlay, IconSun, IconTrash } from '../icons.jsx'
+import logo from '../assets/retearn-logo.png'
 
 // Suggestions only — the field is free text so any OpenRouter model id works,
 // and blank means the server's OPENROUTER_MODEL.
@@ -42,7 +68,7 @@ export default function Sidebar({
           <IconChevron open />
         </button>
         <NavLink to="/" className="rail-brand" title="Opportunity Radar">
-          <span className="dot" />
+          <img className="brand-logo rail-logo" src={logo} alt="Retearn" />
         </NavLink>
         <button className="rail-run" type="button" disabled={busy}
                 onClick={() => onStart('/api/pipeline', false)}
@@ -68,7 +94,7 @@ export default function Sidebar({
     <aside className="sidebar">
       <div className="side-top">
         <NavLink to="/" className="brand">
-          <span className="dot" />
+          <img className="brand-logo" src={logo} alt="Retearn" />
           <span>
             <strong>Opportunity Radar</strong>
             <span className="small muted">discovery → extraction → eligibility</span>
@@ -117,6 +143,23 @@ export default function Sidebar({
           {(FOCUS.find(([v]) => v === (config.focus || 'any')) || [])[2]} Steers
           what gets searched for; nothing is discarded for being another kind.
         </p>
+        {config.focus === 'components' && (
+          <>
+            <h4 style={{ marginTop: 10 }}>Machine</h4>
+            <MachinePicker config={config} setConfig={setConfig} />
+            <h4 style={{ marginTop: 10 }}>Parts to search</h4>
+            <div className="focus-picker">
+              {[['priority', 'Top 80% of spend', 'The off-the-shelf parts that make up 80% of their cost per machine. The weekly run.'],
+                ['all', 'All parts', 'Every off-the-shelf part. A monthly sweep.']].map(([value, label, hint]) => (
+                <button key={value} type="button" title={hint}
+                        className={`focus-opt${(config.component_scope || 'priority') === value ? ' on' : ''}`}
+                        onClick={() => setConfig({ ...config, component_scope: value })}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </section>
 
       <section className="side-block">

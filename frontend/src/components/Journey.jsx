@@ -806,6 +806,7 @@ export default function Journey({ run, events = [], saved = [], totals, live = f
   const [expand, setExpand] = useState({ on: false, epoch: 0 })
   const [failuresOnly, setFailuresOnly] = useState(false)
 
+  const focus = run?.budget?.focus
   const passes = useMemo(() => {
     const all = groupByNode(events)
     all.forEach((p, i) => {
@@ -842,12 +843,12 @@ export default function Journey({ run, events = [], saved = [], totals, live = f
         <StagePass key={`${pass.node}-${pass.ordinal}`} pass={pass} all={events}
                    expandAll={expand.on} expandEpoch={expand.epoch}
                    live={live} isLast={i === passes.length - 1}
-                   nodes={run?.budget?.focus === 'competitors' ? WATCH_NODE : NODE} />
+                   nodes={focus === 'competitors' ? WATCH_NODE : NODE} />
       ))}
       {!passes.length && <p className="muted tight">No problem steps in this run.</p>}
 
-      <FinalOutput saved={saved} totals={totals} live={live}
-                   watch={run?.budget?.focus === 'competitors'} counts={run?.counts} runId={run?.run_id} />
+      <FinalOutput saved={saved} totals={totals} live={live} watch={focus === 'competitors'}
+                   counts={run?.counts} runId={run?.run_id} />
 
       {run.trace_url && (
         <p className="small" style={{ marginTop: 12 }}>

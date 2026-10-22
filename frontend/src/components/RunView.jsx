@@ -5,6 +5,7 @@ import { IconExternal, IconStop } from '../icons.jsx'
 import ExportPanel from './ExportPanel.jsx'
 import Journey from './Journey.jsx'
 import Signals from './Signals.jsx'
+import ComponentRun from './Components.jsx'
 import Opportunity from './Opportunity.jsx'
 
 function Stages({ run, events, stages = STAGES, labels = stages }) {
@@ -140,7 +141,8 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
       if (meta.status !== 'running') {
         // Eligibility runs after discovery returns, so keep polling briefly
         // until it reports in rather than calling the run done too early.
-        if (meta.eligibility_done !== undefined || meta.budget?.focus === 'competitors' || settled.current++ > 12) {
+        if (meta.eligibility_done !== undefined || ['competitors', 'components'].includes(meta.budget?.focus)
+            || settled.current++ > 12) {
           clearInterval(timer)
           await loadResults()
           onRunFinished?.()
@@ -160,6 +162,14 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
   const b = run.budget || {}
   const counts = run.counts || {}
   const watch = b.focus === 'competitors'
+  const parts = b.focus === 'components'
+  // Both watches: plan, search, judge; no scrapes.
+  const lean = watch || parts
+  // A component run opens on its decisions; its steps are under How it ran.
+  const partTabs = ['decisions', 'parts', 'trace']
+  // A component run opens on How it ran, with its Result underneath; it never switches on its own.
+  const autoTab = 'trace'
+  const shownTab = parts ? (partTabs.includes(tab) ? tab : autoTab) : (partTabs.includes(tab) ? 'journey' : tab)
   const saved = results?.saved || []
   // One source of truth. The header used to count save operations while the
   // tabs counted stored records, so a run showed "5 ready" above "Results (3)".
@@ -191,7 +201,15 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
             <span className="mono small muted">{shortId(run.run_id)}</span>
           </div>
           <div className="row small muted" style={{ marginTop: 4 }}>
-            {watch ? (
+            {parts ? (
+              <>
+                <span>{b.product}</span>
+                <span>{{ priority: 'Top 80% of spend', all: 'All parts', named: 'Named parts' }[b.scope] || ''}</span>
+                <span>{counts.offers ?? 0} findings</span>
+                <span>{counts.searched_parts ?? 0} of {counts.parts ?? b.parts ?? 0} parts searched</span>
+                <span>{counts.dropped ?? 0} pages dropped</span>
+              </>
+            ) : watch ? (
               <>
                 <span>{counts.signals ?? 0} new signals</span>
                 <span>{counts.merged ?? 0} added to known stories</span>
@@ -206,7 +224,7 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
                 <span>{totals.set_aside} set aside</span>
               </>
             )}
-            {b.elapsed != null && <span>{Math.round(b.elapsed)}s{watch ? '' : ' in discovery'}</span>}
+            {b.elapsed != null && <span>{Math.round(b.elapsed)}s{lean ? '' : ' in discovery'}</span>}
             {/* Wall time covers eligibility too, which runs after the budget stops. */}
             {run.finished_at && run.started_at && (
               <span>
@@ -235,18 +253,19 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
       </div>
 
       {exporting && (
-        <ExportPanel runId={runId} saved={saved} events={events} watch={watch}
+        <ExportPanel runId={runId} saved={saved} events={events}
+                     kind={parts ? 'components' : watch ? 'competitors' : 'opportunities'}
                      onClose={() => setExporting(false)} />
       )}
 
       <div className="card">
-        {watch
+        {lean
           ? <Stages run={run} events={events} stages={['plan', 'search', 'evaluate']} labels={['plan', 'search', 'judge']} />
           : <Stages run={run} events={events} />}
         <div className="meters">
           <Meter label="tool calls" used={b.spent ?? 0} cap={b.tool_calls ?? 0} />
           <Meter label="searches" used={b.searches ?? counts.searched ?? 0} cap={b.max_searches ?? 0} />
-          {!watch && <Meter label="scrapes" used={b.scrapes ?? counts.scraped ?? 0} cap={b.max_scrapes ?? 0} />}
+          {!lean && <Meter label="scrapes" used={b.scrapes ?? counts.scraped ?? 0} cap={b.max_scrapes ?? 0} />}
           <Meter label="model calls" used={b.llm_calls ?? 0} cap={b.max_llm_calls ?? 0} />
         </div>
         {b.stop_reason && (
@@ -262,7 +281,11 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
       </div>
 
       <div className="tabs">
-        {(watch ? [
+        {(parts ? [
+          ['trace', 'How it ran'],
+          ['decisions', 'Decisions'],
+          ['parts', `Parts (${counts.parts ?? b.parts ?? 0})`],
+        ] : watch ? [
           ['journey', `Journey (${events.length})`],
           ['signals', `Signals (${counts.signals ?? 0})`],
         ] : [
@@ -271,7 +294,7 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
           ['aside', `Set aside (${totals.set_aside})`],
         ]).map(([key, label]) => (
           <button key={key} type="button"
-                  className={`tab${tab === key ? ' on' : ''}`}
+                  className={`tab${shownTab === key ? ' on' : ''}`}
                   onClick={() => setTab(key)}>
             {label}
           </button>
@@ -279,11 +302,11 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
       </div>
 
       <div className="card">
-        {tab === 'journey' && (
+        {shownTab === 'journey' && (
           <Journey run={run} events={events} saved={found} totals={totals} live={running} />
         )}
 
-        {tab === 'opportunities' && (
+        {shownTab === 'opportunities' && (
           found.length ? (
             <>
               {kinds.length > 1 && (
@@ -324,9 +347,12 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
           )
         )}
 
-        {tab === 'aside' && <SetAside results={results} />}
+        {shownTab === 'aside' && <SetAside results={results} />}
 
-        {tab === 'signals' && <Signals runId={runId} count={counts.signals} live={running} />}
+        {shownTab === 'signals' && <Signals runId={runId} count={counts.signals} live={running} />}
+
+        {parts && <ComponentRun runId={runId} live={running} events={events} tab={shownTab} partsTotal={b.parts ?? 0}
+                                  status={run.status} summary={run.summary} />}
       </div>
     </>
   )

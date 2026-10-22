@@ -458,7 +458,8 @@ def _parse_json(content: object) -> dict:
     if text.startswith("```"):
         lines = text.splitlines()
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    value = json.loads(text)
+    # strict=False accepts a raw tab or newline the model copied from a page into a string value.
+    value = json.loads(text, strict=False)
     if not isinstance(value, dict):
         raise ValueError("structured response was not a JSON object")
     return value

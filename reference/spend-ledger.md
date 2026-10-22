@@ -24,3 +24,6 @@ each provider's dashboard.
 | 2026-10-20 | Run 727121 — Competitor watch, first UI run (all 11 competitors); deleted 21 Oct | 30 (highlights + text) | 0 | ~11 model calls | — | check dashboard |
 | 2026-10-21 | Model-written digest attempts on run 727121 (approach dropped) | 0 | 0 | 5 model calls (~$0.02) | — | — |
 | 2026-10-21 | Run cb25a6 — Competitor watch, UI run (all 11 competitors); deleted for baseline | 30 (highlights + text) | 0 | 10 model calls | — | check dashboard |
+| 2026-10-21 | Component probe: Exa page text for 6 ACE parts (price and stock present?) | 6 (highlights + text) | 0 | 0 | — | — |
+| 2026-10-21 | Component watch test runs 5cc679 and 7e20ff (3 ACE parts each, test DB) | 12 (highlights + text) | 0 | ~10 model calls | — | — |
+| 2026-10-21 | Run 15a5c8 — Component watch, full ACE (64 parts) | 68 (highlights + text) | 0 | 53 model calls | — | check dashboard |
