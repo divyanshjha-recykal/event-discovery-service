@@ -41,12 +41,16 @@ async def main() -> int:
     print(f"run {result['run_id']} [{result['status']}] {result['summary']}  (database: {config.database})")
     digest = await run_offers(db, result["run_id"])
     ov = digest["overview"]
-    print(f"\nPossible saving per machine (like for like): ₹{ov['saving_per_machine']:,.0f} of ₹{ov['machine_cost']:,.0f}"
-          f" · searched {ov['searched']} parts ({ov['searched_share']:.0%} of off-the-shelf spend)")
-    for r in digest["act_on"]:
-        b = r["best"]
-        print(f"  ACT ON {r['part_id']} {r['item'][:40]} · {b['product'][:40]} at {b['seller']} · "
-              f"saves ₹{r['saving_per_machine']:,.0f} per machine · {b['url']}")
+    print(f"\nSearched {ov['searched']} parts ({ov['searched_share']:.0%} of off-the-shelf spend) of a ₹{ov['machine_cost']:,.0f} machine")
+    for label, rows, key in (("1. SAME PART, CHEAPER SELLER", digest["same_part"], "best_same"),
+                             ("2. BETTER OR NEWER, FITS", digest["upgrades"], "best_upgrade"),
+                             ("3. CHEAPER ALTERNATIVES", digest["alternatives"], "best_alternative")):
+        print(f"\n{label} ({len(rows)})")
+        for r in rows:
+            o = r[key]
+            print(f"  {r['part_id']} {r['item'][:40]} · {o['product'][:40]} at {o['seller']} · {o['effort']}"
+                  + (f" · saves ₹{o['saving_per_machine']:,.0f} per machine" if (o['saving_per_machine'] or 0) > 0 else "")
+                  + f" · {o['url']}")
     for part in digest["parts"]:
         rate = (f"₹{part['rate']:,.0f} per unit, {part['qty'] or 1:g} per machine"
                 if part["rate"] else "no rate")
@@ -58,6 +62,8 @@ async def main() -> int:
                   + (f"\n    {o['why']}" if o["why"] else "")
                   + (f"\n    would change: {o['changes']}" if o["changes"] else "")
                   + (f"\n    concerns: {o['concerns']}" if o["concerns"] else "") + f"\n    {o['url']}")
+    if digest["unjudged"]:
+        print("\nCould not be judged: " + "; ".join(f"{p['part_id']} {p['item']} ({p['reason']})" for p in digest["unjudged"]))
     if digest["nothing"]:
         print("\nNothing found: " + "; ".join(f"{p['part_id']} {p['item']}" for p in digest["nothing"]))
     if digest["deferred"]:

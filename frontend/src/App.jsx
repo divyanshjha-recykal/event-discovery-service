@@ -106,7 +106,7 @@ export default function App() {
   const clearDatabase = async () => {
     setConfirmClear(false); setBusy(true)
     try {
-      await api('/api/database/clear', { method: 'POST' })
+      await api('/api/database/clear', { method: 'POST', body: JSON.stringify({ confirm: 'delete everything' }) })
       navigate('/')
       await refresh()
     } catch (e) { setError(e.message) } finally { setBusy(false) }
@@ -164,9 +164,11 @@ export default function App() {
           <div className="modal" onClick={(ev) => ev.stopPropagation()}>
             <h3>Clear the database?</h3>
             <p className="small muted">
-              Deletes every stored opportunity, the programme registry, all run history
-              and extraction failures. The business profile is a file and is not
-              touched. This cannot be undone.
+              Deletes every stored opportunity, the programme registry, all run history,
+              extraction failures, pages marked empty, competitor signals and the pages
+              competitor runs have already read, and component findings. The next
+              competitor run starts a new baseline. The business profile and product
+              workbooks are files and are not touched. This cannot be undone.
             </p>
             <div className="row" style={{ marginTop: 16 }}>
               <button className="danger" type="button" onClick={clearDatabase}>

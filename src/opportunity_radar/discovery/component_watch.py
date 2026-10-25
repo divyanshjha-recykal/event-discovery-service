@@ -15,6 +15,7 @@ from typing import Literal
 from uuid import uuid4
 
 import httpx
+from openai import ContentFilterFinishReasonError, LengthFinishReasonError
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import require
@@ -33,14 +34,18 @@ FOCUS = "components"
 PLAN_BATCH = 16
 RESULTS_PER_SEARCH = 8
 TEXT_CHARS = 3_000
-JUDGE_TEXT_CHARS = 1_800
+JUDGE_TEXT_CHARS = 1_400
+HIGHLIGHT_CHARS = 1_000
+# Picks which passages of each page come back; it does not change which pages are found.
+HIGHLIGHTS_QUERY = "price in rupees, pack size or quantity, GST, stock, specifications and ratings"
 CONCURRENCY = 4
 #: A priority run searches the off-the-shelf parts that make up this share of their cost per machine.
 PRIORITY_SHARE = 0.8
 TOKENS_PLAN = 20_000
-TOKENS_JUDGE = 20_000
+TOKENS_JUDGE = 24_000
 OFFER_KINDS = ("newer model", "better spec", "more efficient")
 EFFORTS = ("drop-in", "minor changes", "major changes", "fit unclear")
+PAGE_KINDS = ("seller listing", "manufacturer page", "other")
 
 
 class _PartPlan(BaseModel):
@@ -69,6 +74,7 @@ class _Offer(BaseModel):
     keep: bool
     product: str = Field(max_length=160)
     seller: str = Field(max_length=120)
+    page_kind: Literal[PAGE_KINDS]
     relation: Literal["same part", "alternative"]
     effort: Literal[EFFORTS]
     changes: str = Field(max_length=300)
@@ -82,6 +88,7 @@ class _Offer(BaseModel):
     gst: Literal["included", "excluded", "not stated"]
     in_stock: Literal["yes", "no", "not stated"]
     checks: list[_Check]
+    discontinued: bool
     concerns: str = Field(max_length=300)
     reason: str = Field(max_length=200)
 
@@ -94,7 +101,8 @@ class _Assessment(BaseModel):
 async def exa_product_search(query: str) -> list[dict]:
     """Product pages for one query, with highlights and capped text; raises on any failure."""
     body = {"query": query, "type": "auto", "numResults": RESULTS_PER_SEARCH,
-            "contents": {"highlights": True, "text": {"maxCharacters": TEXT_CHARS}}}
+            "contents": {"highlights": {"query": HIGHLIGHTS_QUERY, "maxCharacters": HIGHLIGHT_CHARS},
+                         "text": {"maxCharacters": TEXT_CHARS}}}
     async with httpx.AsyncClient(headers={"x-api-key": require("EXA_API_KEY")}, timeout=EXA_TIMEOUT_SECONDS) as client:
         response = await asyncio.wait_for(client.post(EXA_URL, json=body), timeout=EXA_TIMEOUT_SECONDS)
     response.raise_for_status()
@@ -114,14 +122,15 @@ find newer, better or more efficient models that could replace it.
 - `off_the_shelf`: false for parts made to this machine's own design (enclosure fabrication,
   moulded or printed parts, harnesses, overlays, custom brackets); true for catalogue parts
   anyone can buy. `reason` says which, in one line.
-- `same_part_query`: a search for product pages selling the exact current model in India,
-  with its manufacturer and model number from the brief. Empty when the brief names no
-  specific model or the part is not off the shelf.
-- `alternative_query`: a search describing what the part does and the specs that matter
-  (from Why chosen and Must have, else the current model's own class and ratings), to find
-  other models that do the same job, including newer ones. Name no manufacturer or model the
-  brief does not name. Empty when the part is not off the shelf.
-- About a dozen words per search, written the way a buyer in India would search.
+- `same_part_query`: a description of the page wanted: an Indian seller's product page for
+  the exact current model, with its manufacturer and model number from the brief, showing its
+  price. Empty when the brief names no specific model or the part is not off the shelf.
+- `alternative_query`: a description of the page wanted: a product page for one model that
+  does this part's job, with the specs that matter (from Why chosen and Must have, else the
+  current model's own class and ratings), including newer models. Name no manufacturer or
+  model the brief does not name. Empty when the part is not off the shelf.
+- Write each as one plain sentence describing that page, about 15 to 25 words, not a list of
+  keywords; the search engine matches pages to descriptions of them.
 
 PARTS:
 {listing}
@@ -135,7 +144,7 @@ PARTS:
 async def _assess(runtime: WorkflowRuntime, part: Part, pages: list[dict]) -> list[_Offer]:
     listing = "\n\n".join(
         f"[{i}] {p['title']}\n    {p['url']}\n    found by: {p['lane']} search\n"
-        f"    highlights: {p['highlights'][:600]}\n    text: {p['text'][:JUDGE_TEXT_CHARS]}"
+        f"    highlights: {p['highlights'][:HIGHLIGHT_CHARS]}\n    text: {p['text'][:JUDGE_TEXT_CHARS]}"
         for i, p in enumerate(pages)
     )
     prompt = f"""## Objective
@@ -143,10 +152,17 @@ These pages were found while looking for one part of a machine from other seller
 models that could replace it. Return one item per page.
 
 ## Decide
-- `keep`: true only when the page sells or specifies one specific product of the same kind as
-  this part, made for the same use. False for category or listing pages without one specific
-  product, articles, products of a different kind or meant for a different use (a household
-  item for a machine part), and products that cannot do the job; `reason` says why.
+- `page_kind`: "seller listing" (a shop or distributor page where this one product can be bought
+  or quoted), "manufacturer page" (the maker's own page for this one product), or "other".
+- `keep`: true only for a page about one specific product of the same kind as this part, made
+  for the same use, and only when:
+  for the same part, it is a seller listing from which the part can be bought in India (a
+  rupee price, or an Indian seller that quotes on request);
+  for an alternative, it is a seller listing or a manufacturer page.
+  False for datasheets, manuals, user guides and other documentation; parts-broker pages that
+  list a part number with stock or price placeholders; price-comparison sites; category or
+  listing pages; articles; products of a different kind or meant for a different use (a
+  household item for a machine part); and products that cannot do the job. `reason` says why.
 - `product`: name and model as the page gives them. `seller`: who sells it on this page.
 - `relation`: "same part" when it is the current model, whoever sells it; otherwise "alternative".
 - `effort`: what switching to it would take in this machine.
@@ -155,8 +171,11 @@ models that could replace it. Return one item per page.
   dimensions, electrical ratings, interface, mounting, and any safety rating or certification)
   and they match the brief. A part with a safety function needs the same safety rating to be
   drop-in. The same part is always drop-in.
-  "minor changes": small changes only: a cable, connector, bracket, setting or configuration,
-  and the page shows it otherwise meets what the part needs.
+  "minor changes": only a cable, connector, bracket or setting changes, and the page shows the
+  same interface and protocol, the same supply voltage, the same safety class and the same
+  mounting otherwise. When the page shows that a new driver or protocol, a different supply
+  voltage, a lower safety class or a new mount would be needed, it is "major changes"; when
+  the page does not say, it is "fit unclear".
   "major changes": redesign, a different software stack or drivers, porting or retraining
   models, new mounting, or requalification.
   "fit unclear": the brief or the page lacks the facts needed to tell whether it would work
@@ -179,11 +198,13 @@ models that could replace it. Return one item per page.
   it is not clear what one unit of this part is, or what the page's price buys.
 - `checks`: one per Must have item in the brief, met / not met / unclear by the page's own specs;
   empty when the brief states no Must have.
+- `discontinued`: true when the page says this product is discontinued, end of life or no
+  longer made.
 - `concerns`: anything else that may stop it replacing the current part (pack quantity,
-  conflicting specs on the page, unclear seller, out of stock). When a price is far below
-  what the other pages here ask for the same product, say so: it may be a different item,
-  an accessory, or not genuine.
-For a dropped page, fill the other fields as best you can; they are not stored.
+  conflicting specs on the page, unclear seller, out of stock). Never repeat Must have results
+  here, such as a compliance mark the page does not state; they belong in `checks` only.
+For a dropped page, decide only `keep` and `reason`; fill every other field with an empty
+value (empty text and lists, null numbers, "other", "fit unclear", "not stated", false).
 
 PART:
 {part.brief()}
@@ -203,7 +224,7 @@ def _rupees(currency: str) -> bool:
 
 
 def price_difference(price: float | None, before_gst: float | None, currency: str, units_per_part: float | None,
-                     rate: float | None, qty: float | None) -> dict:
+                     rate: float | None, qty: float | None, gst: str = "not stated", gst_rate: float | None = None) -> dict:
     """The seller's price per our unit and per machine against the BOM rate (before GST), in code.
 
     Compared only for a rupee price, a known rate and a known unit conversion. On the seller's
@@ -214,12 +235,16 @@ def price_difference(price: float | None, before_gst: float | None, currency: st
             "saving_per_machine": None, "compared_on": None}
     if price is None or not rate or not _rupees(currency) or not units_per_part:
         return none
+    basis = "before GST"
+    if before_gst is None and gst == "included" and gst_rate:
+        # The page gives only a GST-included price: take our GST rate off it, and say so.
+        before_gst, basis = price / (1 + gst_rate), f"before GST at our {gst_rate:.0%} rate"
     unit_price = (before_gst if before_gst is not None else price) * units_per_part
     per_machine = qty or 1
     return {"unit_price": round(unit_price, 2), "diff_pct": round((unit_price - rate) / rate * 100, 1),
             "machine_theirs": round(unit_price * per_machine, 2), "machine_ours": round(rate * per_machine, 2),
             "saving_per_machine": round((rate - unit_price) * per_machine, 2),
-            "compared_on": "before GST" if before_gst is not None else "price as shown"}
+            "compared_on": basis if before_gst is not None else "price as shown"}
 
 
 def part_summary(rate: float | None, offers: list[dict]) -> str:
@@ -234,6 +259,9 @@ def part_summary(rate: float | None, offers: list[dict]) -> str:
         line = "Same part found, but with no rupee price per our unit to compare."
     else:
         line = "Same part not found from another seller."
+    sellers = {o["seller"] for o in offers if o["relation"] == "same part"}
+    if sellers:
+        line += f" Same part from {len(sellers)} seller(s)."
     alternatives = [o for o in offers if o["relation"] == "alternative"]
     if not alternatives:
         return line + " No alternatives."
@@ -249,7 +277,7 @@ def part_summary(rate: float | None, offers: list[dict]) -> str:
 
 def _shown(o: dict) -> str:
     """The seller's price per our unit, with its GST basis."""
-    basis = "before GST" if o["compared_on"] == "before GST" else f"GST {o['gst']}"
+    basis = o["compared_on"] if o["compared_on"].startswith("before GST") else f"GST {o['gst']}"
     return f"₹{o['unit_price']:,.0f} per unit ({basis})"
 
 
@@ -275,16 +303,32 @@ def select_priority(parts: list[Part], share: float) -> tuple[list[Part], list[P
 
 
 VERDICTS = ("Cheaper seller found", "Cheaper drop-in found", "Changes needed to save", "We pay the lowest found",
-            "No comparable price", "Nothing found", "Low spend, not searched this run", "Custom, not searched")
+            "No comparable price", "Could not be judged", "Nothing found", "Low spend, not searched this run",
+            "Custom, not searched")
+
+# A fault in one part's reply (cut off, unreadable, wrong shape) fails that part; anything else stops the run.
+REPLY_ERRORS = (LengthFinishReasonError, ContentFilterFinishReasonError, ValueError)
+
+
+def reply_error(exc: Exception) -> str:
+    """What went wrong with a judge reply, in words that point at the cause."""
+    usage = exc.completion.usage if isinstance(exc, LengthFinishReasonError) else None
+    if usage:
+        thought = usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
+        return (f"the model's reply was cut off at its {usage.completion_tokens:,}-token output limit"
+                + (f", {thought:,} of them spent reasoning" if thought else ""))
+    return f"{type(exc).__name__}: {exc}"[:300]
 
 
 def part_decision(offers: list[dict]) -> dict:
     """What one part's findings mean, in code: the best like-for-like option, or why there is none."""
     like = [o for o in offers if o["diff_pct"] is not None and (o["relation"] == "same part" or o["effort"] == "drop-in")]
     best = min(like, key=lambda o: o["diff_pct"], default=None)
-    changes = [o for o in offers if o["diff_pct"] is not None and o["diff_pct"] < 0
-               and o["relation"] == "alternative" and o["effort"] in ("minor changes", "major changes")]
-    change = min(changes, key=lambda o: o["diff_pct"], default=None)
+    same = min((o for o in offers if o["relation"] == "same part" and o["diff_pct"] is not None and o["diff_pct"] < 0),
+               key=lambda o: o["diff_pct"], default=None)
+    cheaper = [o for o in offers if o["diff_pct"] is not None and o["diff_pct"] < 0
+               and o["relation"] == "alternative" and o["effort"] in ("drop-in", "minor changes", "major changes")]
+    alternative = min(cheaper, key=lambda o: (EFFORTS.index(o["effort"]), o["diff_pct"]), default=None)
     # Better, newer or more efficient, and shown to fit: drop-in or minor changes, no must-have failed.
     upgrades = [o for o in offers if o["relation"] == "alternative" and o["offers"]
                 and o["effort"] in ("drop-in", "minor changes") and all(c["status"] != "not met" for c in o["checks"])]
@@ -295,15 +339,15 @@ def part_decision(offers: list[dict]) -> dict:
         verdict = "Cheaper seller found" if best["relation"] == "same part" else "Cheaper drop-in found"
     elif best:
         verdict = "We pay the lowest found"
-    elif change:
+    elif alternative:
         verdict = "Changes needed to save"
     elif offers:
         verdict = "No comparable price"
     else:
         verdict = "Nothing found"
     saving = best["saving_per_machine"] if best and best["diff_pct"] < 0 else 0
-    return {"verdict": verdict, "best": best, "best_change": change, "best_upgrade": upgrade,
-            "upgrades": len(upgrades), "saving_per_machine": saving}
+    return {"verdict": verdict, "best": best, "best_same": same, "best_alternative": alternative,
+            "best_upgrade": upgrade, "upgrades": len(upgrades), "saving_per_machine": saving}
 
 
 async def run_offers(db, run_id: str) -> dict:
@@ -312,6 +356,7 @@ async def run_offers(db, run_id: str) -> dict:
     journey = (run or {}).get("journey") or []
     planned = [p for e in journey if e.get("tool") == "plan" for p in e.get("parts") or []]
     deferred = {d["part_id"] for e in journey if e.get("tool") == "scope" for d in e.get("deferred") or []}
+    unjudged = {e["part_id"]: e["detail"] for e in journey if e.get("tool") == "assess" and e.get("outcome") == "failed"}
     by_part: dict[str, list[dict]] = {}
     async for o in db[OFFERS].find({"run_id": run_id}, {"_id": 0}):
         if "unit_price" not in o:
@@ -323,15 +368,22 @@ async def run_offers(db, run_id: str) -> dict:
         found = sorted(by_part.get(p["part_id"], []), key=lambda o: (
             order["same part"] if o["relation"] == "same part" else order[o["effort"]],
             o["diff_pct"] if o["diff_pct"] is not None else float("inf")))
-        base = {k: p.get(k) for k in ("part_id", "item", "subsystem", "rate", "qty")}
+        base = {k: p.get(k) for k in ("part_id", "item", "subsystem", "rate", "qty", "gst")}
         base["line_cost"] = line_cost(p.get("rate"), p.get("qty"))
         if not p["off_the_shelf"]:
             rows.append({**base, "verdict": "Custom, not searched", "note": p["reason"], "findings": 0,
-                         "best": None, "best_change": None, "best_upgrade": None, "upgrades": 0,
+                         "best": None, "best_same": None, "best_alternative": None, "best_upgrade": None,
+                         "upgrades": 0,
                          "saving_per_machine": 0})
         elif p["part_id"] in deferred:
             rows.append({**base, "verdict": "Low spend, not searched this run", "note": "", "findings": 0,
-                         "best": None, "best_change": None, "best_upgrade": None, "upgrades": 0,
+                         "best": None, "best_same": None, "best_alternative": None, "best_upgrade": None,
+                         "upgrades": 0,
+                         "saving_per_machine": 0})
+        elif p["part_id"] in unjudged:
+            rows.append({**base, "verdict": "Could not be judged", "note": unjudged[p["part_id"]], "findings": 0,
+                         "best": None, "best_same": None, "best_alternative": None, "best_upgrade": None,
+                         "upgrades": 0,
                          "saving_per_machine": 0})
         else:
             summary = part_summary(p["rate"], found) if found else "Nothing found."
@@ -355,14 +407,17 @@ async def run_offers(db, run_id: str) -> dict:
     }
     return {
         "overview": overview, "rows": rows, "parts": parts,
-        "act_on": sorted((r for r in rows if r["saving_per_machine"] > 0), key=lambda r: -r["saving_per_machine"]),
+        "same_part": sorted((r for r in rows if r.get("best_same")), key=lambda r: -r["best_same"]["saving_per_machine"]),
         "upgrades": sorted((r for r in rows if r.get("best_upgrade")),
                            key=lambda r: (r["best_upgrade"]["effort"] != "drop-in", -r["line_cost"])),
-        "review": sorted((r for r in rows if r.get("best_change")),
-                         key=lambda r: r["best_change"]["saving_per_machine"], reverse=True),
+        "alternatives": sorted((r for r in rows if r.get("best_alternative")),
+                               key=lambda r: (EFFORTS.index(r["best_alternative"]["effort"]),
+                                              -r["best_alternative"]["saving_per_machine"])),
         "custom": [{"part_id": r["part_id"], "item": r["item"], "reason": r["note"]} for r in rows
                    if r["verdict"] == "Custom, not searched"],
         "nothing": [{"part_id": r["part_id"], "item": r["item"]} for r in rows if r["verdict"] == "Nothing found"],
+        "unjudged": [{"part_id": r["part_id"], "item": r["item"], "reason": r["note"]} for r in rows
+                     if r["verdict"] == "Could not be judged"],
         "deferred": [{"part_id": r["part_id"], "item": r["item"], "line_cost": r["line_cost"]} for r in rows
                      if r["verdict"] == "Low spend, not searched this run"],
     }
@@ -387,7 +442,8 @@ async def record_check(db, offer_id: str, check: str, note: str) -> dict:
 async def run_component_watch(db, product: str, model: str | None = None, run_id: str | None = None,
                               budget: RunBudget | None = None, only: list[str] | None = None,
                               scope: Literal["priority", "all"] = "priority") -> dict:
-    """One triggered run over a product's parts; returns its counts. Stops with an error on a failed step.
+    """One triggered run over a product's parts; returns its counts. A part whose judge reply fails is
+    marked "Could not be judged" and the run goes on; any other failed step stops the run.
 
     "priority" searches the off-the-shelf parts that make up PRIORITY_SHARE of their cost per
     machine; "all" searches every off-the-shelf part; `only` searches the parts named.
@@ -404,7 +460,8 @@ async def run_component_watch(db, product: str, model: str | None = None, run_id
             "parts": len(parts), "scope": "named" if only else scope}
     await start_run(db, run_id, model or "(OPENROUTER_MODEL)", meta, [])
     counts = {"parts": len(parts), "searched_parts": 0, "deferred": 0, "searched": 0, "pages": 0, "offers": 0,
-              "dropped": 0}
+              "dropped": 0, "judged": 0, "unjudged": 0}
+    unjudged: list[str] = []
     status, summary = "succeeded", ""
     gate = asyncio.Semaphore(CONCURRENCY)
     try:
@@ -414,7 +471,7 @@ async def run_component_watch(db, product: str, model: str | None = None, run_id
             for p in await _plan(runtime, profile.product, batch):
                 plans.setdefault(p.part_id, p)
             await w._record(runtime, "plan", node="plan", outcome="ok", asked=len(batch), parts=[
-                {"part_id": x.part_id, "item": x.item, "subsystem": x.subsystem, "rate": x.rate, "qty": x.qty,
+                {"part_id": x.part_id, "item": x.item, "subsystem": x.subsystem, "rate": x.rate, "qty": x.qty, "gst": x.gst,
                  "off_the_shelf": plans[x.part_id].off_the_shelf, "reason": plans[x.part_id].reason,
                  "queries": [q for q in (plans[x.part_id].same_part_query, plans[x.part_id].alternative_query) if q]}
                 for x in batch if x.part_id in plans])
@@ -441,7 +498,16 @@ async def run_component_watch(db, product: str, model: str | None = None, run_id
                 counts["pages"] += len(found)
                 if not found:
                     return
-                verdicts = await _assess(runtime, part, found)
+                try:
+                    verdicts = await _assess(runtime, part, found)
+                except REPLY_ERRORS as exc:
+                    detail = reply_error(exc)
+                    counts["unjudged"] += 1
+                    unjudged.append(f"{part.part_id} could not be judged: {detail}")
+                    await w._record(runtime, "assess", node="evaluate", outcome="failed", part_id=part.part_id,
+                                    item=part.item, considered=len(found), detail=detail)
+                    return
+                counts["judged"] += 1
             now = datetime.now(timezone.utc)
             kept = []
             for o in verdicts:
@@ -454,7 +520,8 @@ async def run_component_watch(db, product: str, model: str | None = None, run_id
                     "part_id": part.part_id, "item": part.item, "rate": part.rate, "qty": part.qty,
                     "url": page["url"], "title": page["title"], "lane": page["lane"], "query": page["query"],
                     "found_at": now, **o.model_dump(exclude={"index", "keep", "reason"}),
-                    **price_difference(o.price, o.price_before_gst, o.currency, o.units_per_part, part.rate, part.qty),
+                    **price_difference(o.price, o.price_before_gst, o.currency, o.units_per_part, part.rate, part.qty,
+                                       o.gst, part.gst),
                 })
             if kept:
                 await db[OFFERS].insert_many([dict(k) for k in kept])
@@ -480,9 +547,11 @@ async def run_component_watch(db, product: str, model: str | None = None, run_id
                 group.create_task(one_part(x))
         summary = (f"{counts['offers']} finding(s) for {counts['searched_parts']} off-the-shelf part(s) of {len(parts)}, "
                    f"from {counts['pages']} page(s) across {counts['searched']} searches; {counts['dropped']} page(s) dropped"
-                   + (f"; {counts['deferred']} low-spend part(s) left for a full run." if counts["deferred"] else "."))
-        if runtime.failures:
+                   + (f"; {counts['deferred']} low-spend part(s) left for a full run" if counts["deferred"] else "")
+                   + (f"; {counts['unjudged']} part(s) could not be judged." if counts["unjudged"] else "."))
+        if runtime.failures or (counts["unjudged"] and not counts["judged"]):
             status = "failed"
+        runtime.failures.extend(unjudged)
     except Exception as exc:
         while isinstance(exc, ExceptionGroup):
             exc = exc.exceptions[0]

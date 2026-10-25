@@ -18,7 +18,7 @@ from .paths import PRODUCTS_DIR
 
 #: The columns the team fills in; Why chosen and Must Have may be left blank.
 COLUMNS = ("Part ID", "Subsystem", "Item", "What it does", "Manufacturer", "Part number",
-           "Qty per machine", "Rate (₹, before GST)", "Vendor", "Why chosen", "Must Have")
+           "Qty per machine", "Rate (₹, before GST)", "GST %", "Vendor", "Why chosen", "Must Have")
 SUBSYSTEMS = {"Embedded", "Electrical", "Mechanical"}
 
 
@@ -36,6 +36,7 @@ class Part:
     part_number: str
     qty: float | None
     rate: float | None
+    gst: float | None
     vendor: str
     why_chosen: str
     must_have: tuple[str, ...] = ()
@@ -118,6 +119,7 @@ def load_product_profile(product: str, path: Path | None = None) -> ProductProfi
             manufacturer=v["Manufacturer"], part_number=v["Part number"],
             qty=_number(v["Qty per machine"], f"{where} quantity"),
             rate=_number(v["Rate (₹, before GST)"], f"{where} rate"),
+            gst=None if (g := _number(v["GST %"], f"{where} GST %")) is None else g / 100,
             vendor=v["Vendor"], why_chosen=v["Why chosen"],
             must_have=tuple(s.strip() for s in v["Must Have"].split(";") if s.strip()),
         ))

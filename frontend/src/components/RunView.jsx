@@ -143,16 +143,23 @@ export default function RunView({ onRunFinished, onStop, stopping }) {
         // until it reports in rather than calling the run done too early.
         if (meta.eligibility_done !== undefined || ['competitors', 'components'].includes(meta.budget?.focus)
             || settled.current++ > 12) {
-          clearInterval(timer)
           await loadResults()
           onRunFinished?.()
+          return true
         }
       }
+      return false
     }
 
-    tick()
-    timer = setInterval(tick, 1500)
-    return () => { stopped = true; clearInterval(timer) }
+    // The next poll starts only after this one ends, so two never share a cursor.
+    const loop = async () => {
+      let done = false
+      try { done = await tick() } finally {
+        if (!stopped && !done) timer = setTimeout(loop, 1500)
+      }
+    }
+    loop()
+    return () => { stopped = true; clearTimeout(timer) }
   }, [runId, loadResults, onRunFinished])
 
   if (error && !run) return <div className="card err">{error}</div>

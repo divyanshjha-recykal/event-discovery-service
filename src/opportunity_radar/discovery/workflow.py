@@ -605,25 +605,23 @@ async def _structured(runtime: WorkflowRuntime, model_cls, name: str,
                 pass
         if not (salvage_key and salvage_model):
             raise
-    except Exception:
-        if not (salvage_key and salvage_model):
-            raise
-        # Keep the items that do validate. A partial analysis beats none, and
-        # the alternative is paying for a scrape and a model call and storing
-        # nothing because one field ran long.
-        kept = []
-        for item in payload.get(salvage_key) or []:
-            try:
-                kept.append(salvage_model.model_validate(item))
-            except Exception:  # noqa: BLE001 — drop only the item that is wrong
-                continue
-        if not kept:
-            raise
-        runtime.warnings.append(
-            f"{name}: kept {len(kept)} of "
-            f"{len(payload.get(salvage_key) or [])} item(s); the rest failed validation"
-        )
-        return model_cls.model_construct(**{salvage_key: kept})
+        error = exc
+    # Keep the items that do validate. A partial analysis beats none, and
+    # the alternative is paying for a scrape and a model call and storing
+    # nothing because one field ran long.
+    kept = []
+    for item in payload.get(salvage_key) or []:
+        try:
+            kept.append(salvage_model.model_validate(item))
+        except ValidationError:  # drop only the item that is wrong
+            continue
+    if not kept:
+        raise error
+    runtime.warnings.append(
+        f"{name}: kept {len(kept)} of "
+        f"{len(payload.get(salvage_key) or [])} item(s); the rest failed validation"
+    )
+    return model_cls.model_construct(**{salvage_key: kept})
 
 
 async def _record(
@@ -1436,12 +1434,13 @@ async def fetch_node(payload: dict, *, services: WorkflowRuntime) -> Command:
             runtime, "scrape", node="fetch", url=pick.hit.url,
             outcome="failed", detail=detail,
         )
+        # Through extract like every other site, so evaluate waits for the sites still being read.
         return Command(
             update={
                 "analysis_errors": [{"seed_url": pick.hit.url, "detail": detail}],
                 "analyzed_seeds": [pick.hit.url],
             },
-            goto="evaluate",
+            goto=Send("extract", {**payload, "bundle": None}),
         )
     if bundle.duplicate_of:
         return Command(
@@ -1453,7 +1452,7 @@ async def fetch_node(payload: dict, *, services: WorkflowRuntime) -> Command:
                     "stage": "duplicate",
                 }],
             },
-            goto="evaluate",
+            goto=Send("extract", {**payload, "bundle": None}),
         )
     return Command(
         update={"evidence_bundles": [bundle]},
@@ -1824,7 +1823,9 @@ async def _prepare(
 async def extract_node(payload: dict, *, services: WorkflowRuntime) -> dict:
     """Read ONE site: name the opportunities on it and validate each into a record."""
     runtime = services
-    bundle: EvidenceBundle = payload["bundle"]
+    bundle: EvidenceBundle | None = payload["bundle"]
+    if bundle is None:
+        return {}  # fetch failed or found a duplicate and already recorded why
     pick: RankedPick = payload["pick"]
     today = date.fromisoformat(payload["as_of_date"])
 
@@ -2249,7 +2250,7 @@ def _progress_saver():
 # Command goto is decided at runtime, so the graph cannot infer these edges.
 _DESTINATIONS = {
     "rank": ("fetch", "plan", "evaluate"),
-    "fetch": ("extract", "evaluate"),
+    "fetch": ("extract",),
 }
 
 

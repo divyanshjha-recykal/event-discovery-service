@@ -231,7 +231,9 @@ def listed_price(o: dict) -> str:
     """The price exactly as the seller lists it, with what it buys and its GST basis."""
     if o["price"] is None:
         return "no price shown"
-    text = f"{o['currency']} {o['price']:,.0f} per {o['price_unit'] or 'unit not stated'} (GST {o['gst']})"
+    # A before-GST figure below the listed price means the listed price includes GST, whatever the label says.
+    gst = "included" if o["price_before_gst"] is not None and o["price_before_gst"] < o["price"] else o["gst"]
+    text = f"{o['currency']} {o['price']:,.0f} per {o['price_unit'] or 'unit not stated'} (GST {gst})"
     if o["price_before_gst"] is not None and o["price_before_gst"] != o["price"]:
         text += f"; {o['price_before_gst']:,.0f} before GST"
     return text
@@ -244,7 +246,8 @@ def compared_price(o: dict) -> str:
             return "—"
         return "not compared: " + ("not a rupee price" if o["currency"].strip().upper() not in ("INR", "₹", "RS", "RS.")
                                    else f"listed per {o['price_unit'] or 'an unstated unit'}, not clearly one of our units")
-    basis = "" if o["compared_on"] == "before GST" else f", on their price with GST {o['gst']}"
+    basis = ("" if o["compared_on"] == "before GST" else f", {o['compared_on']}" if o["compared_on"].startswith("before GST")
+             else f", on their price with GST {o['gst']}")
     return f"{_rs(o['unit_price'])} per unit · {o['diff_pct']:+.0f}% vs ours {_rs(o['rate'])}{basis}"
 
 
@@ -269,54 +272,61 @@ def components_email(digest: dict, run: dict) -> dict:
     filename = f"component-watch-{product.lower()}-{run['run_id'][:6]}.csv"
     count = sum(len(p["offers"]) for p in digest["parts"])
     title = f"Component watch · {product} · {date.today():%d %b %Y}"
-    sub = (f"{product}: {count} finding(s) for {len(digest['parts'])} part(s) · nothing found for "
-           f"{len(digest['nothing'])} · {len(digest['custom'])} custom and {len(digest['deferred'])} low-spend part(s) "
-           f"not searched. Prices are compared per unit as our BOM counts it, before GST where the seller states it.")
+    sub = ("Prices are compared per unit as our BOM counts it, before GST: the seller's own before-GST price, or their "
+           "GST-included price less our GST rate for the part.")
     head = ["Type", "Product · seller", "Listed price", "Per unit vs ours", "Per machine", "Notes"]
     html = [_WRAP, _H1.format(_e(title)), _SUB.format(_e(sub))]
     text = [title, sub, ""]
-    ov = digest["overview"]
-    lead = (f"Possible saving: {_rs(ov['saving_per_machine'])} per machine, like for like, on a {_rs(ov['machine_cost'])} "
-            f"machine. {ov['searched']} parts searched ({ov['searched_share']:.0%} of off-the-shelf spend); "
-            f"{ov['verdicts']['We pay the lowest found']} where we already pay the lowest price found; "
-            f"{ov['upgrades']} with a better or newer option that fits.")
-    html.append(_NOTE.format(_e(lead)))
-    text += [lead, ""]
-    for label, rows, pick in (("Act on: cheaper, like for like", digest["act_on"], "best"),
-                              ("Worth a look: cheaper, but changes needed", digest["review"], "best_change")):
+    def ours(r):
+        text = f"{_rs(r['rate'] or 0)} × {r['qty'] or 1:g} = {_rs(r['line_cost'])}"
+        return text + (f" ({_rs(r['line_cost'] * (1 + r['gst']))} with {r['gst']:.0%} GST)" if r.get("gst") else "")
+
+    def link(o):
+        return (f'<a href="{_e(o["url"])}" style="color:#0969da;text-decoration:none">{_e(o["product"] or o["title"])}</a>'
+                f'<br><span style="color:#59636e">{_e(o["seller"])}</span>')
+
+    def section(label, rows, head, cells, line, empty):
+        html.append(_H2.format(_e(label)))
+        text.extend([label.upper(), ""])
         if not rows:
-            continue
-        html += [_H2.format(_e(label)), _TABLE, "<tr>" + "".join(_TH.format(h) for h in (
-            "Part", "Ours per machine", "Option · seller", "Per unit vs ours", "Saving per machine", "Effort")) + "</tr>"]
-        text += [label.upper(), ""]
+            html.append(_MORE.format(_e(empty)))
+            text.extend([empty, ""])
+            return
+        html.extend([_TABLE, "<tr>" + "".join(_TH.format(h) for h in head) + "</tr>"])
         for r in rows:
-            o = r[pick]
-            cells = [_e(f"{r['part_id']} · {r['item']}"), _e(_rs(r["line_cost"])),
-                     f'<a href="{_e(o["url"])}" style="color:#0969da;text-decoration:none">{_e(o["product"] or o["title"])}</a>'
-                     f'<br><span style="color:#59636e">{_e(o["seller"])}</span>',
-                     _e(compared_price(o)), _e(_rs(o["saving_per_machine"])),
-                     _e("same part" if o["relation"] == "same part" else o["effort"])]
-            html.append("<tr>" + "".join(_TD.format(c) for c in cells) + "</tr>")
-            text += [f"* {r['part_id']} {r['item']}: {o['product']} at {o['seller']}, saves {_rs(o['saving_per_machine'])}"
-                     f" per machine ({compared_price(o)}) {o['url']}", ""]
+            html.append("<tr>" + "".join(_TD.format(c) for c in cells(r)) + "</tr>")
+            text.extend([line(r), ""])
         html.append("</table>")
-    if digest["upgrades"]:
-        label = "Better or newer options that fit"
-        html += [_H2.format(_e(label)), _TABLE, "<tr>" + "".join(_TH.format(h) for h in (
-            "Part", "Option · seller", "What is better", "Effort", "Per unit vs ours")) + "</tr>"]
-        text += [label.upper(), ""]
-        for r in digest["upgrades"]:
-            o = r["best_upgrade"]
-            better = f"{', '.join(o['offers'])}: {o['why']}"
-            cells = [_e(f"{r['part_id']} · {r['item']}"),
-                     f'<a href="{_e(o["url"])}" style="color:#0969da;text-decoration:none">{_e(o["product"] or o["title"])}</a>'
-                     f'<br><span style="color:#59636e">{_e(o["seller"])}</span>',
-                     _e(_short(better, 240)), _e(o["effort"] + (f": {o['changes']}" if o["changes"] else "")),
-                     _e(compared_price(o))]
-            html.append("<tr>" + "".join(_TD.format(c) for c in cells) + "</tr>")
-            text += [f"* {r['part_id']} {r['item']}: {o['product']} at {o['seller']} ({o['effort']}) — {better} {o['url']}", ""]
-        html.append("</table>")
-    html.append(_H2.format("Every part searched"))
+
+    part = lambda r: _e(f"{r['part_id']} · {r['item']}")
+    section("1. Same part, cheaper seller", digest["same_part"],
+            ("Part", "Ours, before GST", "Seller", "Listed price", "Per unit vs ours", "Saving per machine"),
+            lambda r: [part(r), _e(ours(r)), link(r["best_same"]), _e(listed_price(r["best_same"])),
+                       _e(compared_price(r["best_same"])), _e(_rs(r["best_same"]["saving_per_machine"]))],
+            lambda r: (f"* {r['part_id']} {r['item']}: {r['best_same']['seller']}, {compared_price(r['best_same'])}, "
+                       f"saves {_rs(r['best_same']['saving_per_machine'])} per machine {r['best_same']['url']}"),
+            "No other seller has the same part for less in this run.")
+    section("2. Better or newer, fits", digest["upgrades"],
+            ("Part", "Option · seller", "What is better", "Fit", "Per unit vs ours"),
+            lambda r: [part(r), link(r["best_upgrade"]),
+                       _e(_short(f"{', '.join(r['best_upgrade']['offers'])}: {r['best_upgrade']['why']}", 240)),
+                       _e(r["best_upgrade"]["effort"] + (f": {r['best_upgrade']['changes']}" if r["best_upgrade"]["changes"] else "")),
+                       _e(compared_price(r["best_upgrade"]))],
+            lambda r: (f"* {r['part_id']} {r['item']}: {r['best_upgrade']['product']} at {r['best_upgrade']['seller']} "
+                       f"({r['best_upgrade']['effort']}): {', '.join(r['best_upgrade']['offers'])} {r['best_upgrade']['url']}"),
+            "No better or newer option was shown to fit. Must Have specs in the workbook let the judge confirm fit.")
+    section("3. Cheaper alternatives (fits as is first, then needs adaptation)", digest["alternatives"],
+            ("Part", "Ours, before GST", "Option · seller", "Per unit vs ours", "Saving per machine", "What would change"),
+            lambda r: [part(r), _e(ours(r)), link(r["best_alternative"]), _e(compared_price(r["best_alternative"])),
+                       _e(_rs(r["best_alternative"]["saving_per_machine"])),
+                       _e("fits as is" if r["best_alternative"]["effort"] == "drop-in"
+                          else f"{r['best_alternative']['effort']}: {r['best_alternative']['changes']}")],
+            lambda r: (f"* {r['part_id']} {r['item']}: {r['best_alternative']['product']} at {r['best_alternative']['seller']}, "
+                       f"saves {_rs(r['best_alternative']['saving_per_machine'])} per machine "
+                       f"({r['best_alternative']['effort']}) {r['best_alternative']['url']}"),
+            "No cheaper alternative in this run.")
+    html.append(_H2.format("Everything else found, by part"))
+    text += ["EVERYTHING ELSE FOUND, BY PART", ""]
     for part in digest["parts"]:
         rate = f"ours {_rs(part['rate'])} per unit, {part['qty'] or 1:g} per machine" if part["rate"] else "no rate on file"
         heading = f"{part['part_id']} · {part['item']} · {rate}"
@@ -338,7 +348,9 @@ def components_email(digest: dict, run: dict) -> dict:
         if more > 0:
             html.append(_MORE.format(_e(f"{more} more finding(s) for this part in the attached {filename} and on the dashboard.")))
             text += [f"  ({more} more in {filename})", ""]
+    unjudged = "; ".join(f"{p['item']} ({p['reason']})" for p in digest["unjudged"])
     foot = (f"Nothing found for: {'; '.join(p['item'] for p in digest['nothing']) or 'none'}. "
+            + (f"Could not be judged, the model's reply failed: {unjudged}. " if unjudged else "")
             + (f"Low spend, left for a full run: {'; '.join(p['item'] for p in digest['deferred'])}. " if digest["deferred"] else "")
             + f"Every finding with its must-have checks is in the attached {filename}.")
     html += [_FOOT.format(_e(foot)), "</div>"]

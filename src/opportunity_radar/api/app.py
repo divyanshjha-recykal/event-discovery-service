@@ -42,6 +42,7 @@ from ..profile import load_business_profile
 from ..product_profile import ProductProfileError, load_product_profile, machines
 from ..reporting import components_email, configured_recipients, opportunities_email, send_mail, signals_email
 from ..storage import (
+    DEAD_ENDS,
     EXTRACTION_FAILURES,
     OPPORTUNITIES,
     PROGRAMS,
@@ -86,6 +87,11 @@ async def _startup() -> None:
     _client = get_client(config)
     _db = get_database(_client, config)
     await ensure_indexes(_db)
+    # Runs live inside this process, so any run still marked running died with the last one.
+    await _db[RUNS].update_many(
+        {"status": "running"},
+        {"$set": {"status": "failed", "summary": "server restarted during the run"}},
+    )
 
 
 @app.on_event("shutdown")
@@ -320,7 +326,11 @@ async def delete_run(run_id: str) -> dict:
     if not result.deleted_count:
         raise HTTPException(status_code=404, detail=f"no run {run_id}")
     offers = await _db[cmw.OFFERS].delete_many({"run_id": run_id})
-    return {"run_id": run_id, "deleted": True, "component_findings_deleted": offers.deleted_count}
+    # A competitor run's pages count as seen only while the run exists, so a redo reads them again.
+    seen = await _db[cw.SEEN].delete_many({"run_id": run_id})
+    signals = await _db[cw.SIGNALS].delete_many({"run_id": run_id})
+    return {"run_id": run_id, "deleted": True, "component_findings_deleted": offers.deleted_count,
+            "competitor_pages_deleted": seen.deleted_count, "competitor_signals_deleted": signals.deleted_count}
 
 
 @app.get("/api/runs/{run_id}/results")
@@ -748,16 +758,21 @@ async def run_eligibility(request: EligibilityRequest, background: BackgroundTas
     return {"status": "running"}
 
 
+class ClearRequest(BaseModel):
+    # A JSON body, so a form on another site cannot send it without a CORS check this API never passes.
+    confirm: Literal["delete everything"]
+
+
 @app.post("/api/database/clear")
-async def clear_database() -> dict:
+async def clear_database(request: ClearRequest) -> dict:
     """Wipe every collection so a demo can start from nothing.
 
     Destructive and deliberately explicit — the UI puts a confirmation in front
-    of it. It removes stored opportunities, the program registry, run history
-    and extraction failures; it does not touch the business profile, which is a file.
+    of it. It does not touch the business profile or product workbooks, which are files.
     """
     deleted = {}
-    for name in (OPPORTUNITIES, PROGRAMS, RUNS, EXTRACTION_FAILURES):
+    for name in (OPPORTUNITIES, PROGRAMS, RUNS, EXTRACTION_FAILURES, DEAD_ENDS,
+                 cw.SEEN, cw.SIGNALS, cmw.OFFERS, "run_progress", "run_progress_writes"):
         result = await _db[name].delete_many({})
         deleted[name] = result.deleted_count
     return {"deleted": deleted}

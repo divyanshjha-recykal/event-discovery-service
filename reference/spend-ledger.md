@@ -27,3 +27,9 @@ each provider's dashboard.
 | 2026-10-21 | Component probe: Exa page text for 6 ACE parts (price and stock present?) | 6 (highlights + text) | 0 | 0 | — | — |
 | 2026-10-21 | Component watch test runs 5cc679 and 7e20ff (3 ACE parts each, test DB) | 12 (highlights + text) | 0 | ~10 model calls | — | — |
 | 2026-10-21 | Run 15a5c8 — Component watch, full ACE (64 parts) | 68 (highlights + text) | 0 | 53 model calls | — | check dashboard |
+| 2026-10-22 | Run a28671 — Component watch, ACE Top 80% (13 parts) | 19 (highlights + text) | 0 | 17 model calls | — | check dashboard |
+| 2026-10-22 | Run c4239b — Component watch, ACE All parts; failed after 5 parts (JSON control character) | 17 (highlights + text) | 0 | 12 model calls | — | check dashboard |
+| 2026-10-23 | Run 89f045 — Component watch, ACE All parts; failed after 12 parts (judge reply cut off at the output limit) | 29 (highlights + text) | 0 | 20 model calls | — | check dashboard |
+| 2026-10-23 | Run 44e7d3 — Component watch, 5-part test (ACE-006/008/010/011/013) after the page-rule and section changes; ACE-008 cut off at the output limit | 10 (highlights + text) | 0 | 6 model calls | — | check dashboard |
+| 2026-10-23 | Run 68bd27 — Component watch, 3-part re-test (ACE-006/008/011) after the minor-changes, dropped-page and sheet fixes; no cut-offs | 6 (highlights + text) | 0 | 4 model calls | — | check dashboard |
+| 2026-10-23 | Run a4ec6b — Component watch, full ACE (All parts, 49 off-the-shelf) after the page-rule, section, GST and sheet changes | 67 (highlights + text) | 0 | 53 model calls | — | check dashboard |
