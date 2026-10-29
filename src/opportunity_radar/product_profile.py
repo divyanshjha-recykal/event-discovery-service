@@ -36,7 +36,7 @@ class Part:
     part_number: str
     qty: float | None
     rate: float | None
-    gst: float | None
+    gst: float
     vendor: str
     why_chosen: str
     must_have: tuple[str, ...] = ()
@@ -70,6 +70,13 @@ def _number(value, where: str) -> float | None:
         return float(str(value).replace(",", ""))
     except ValueError:
         raise ProductProfileError(f"{where}: expected a number, found {value!r}") from None
+
+
+def _gst(value, where: str) -> float:
+    rate = _number(value, f"{where} GST %")
+    if rate is None:
+        raise ProductProfileError(f"{where}: GST % is blank")
+    return rate / 100
 
 
 def profile_path(product: str) -> Path:
@@ -119,7 +126,7 @@ def load_product_profile(product: str, path: Path | None = None) -> ProductProfi
             manufacturer=v["Manufacturer"], part_number=v["Part number"],
             qty=_number(v["Qty per machine"], f"{where} quantity"),
             rate=_number(v["Rate (₹, before GST)"], f"{where} rate"),
-            gst=None if (g := _number(v["GST %"], f"{where} GST %")) is None else g / 100,
+            gst=_gst(v["GST %"], where),
             vendor=v["Vendor"], why_chosen=v["Why chosen"],
             must_have=tuple(s.strip() for s in v["Must Have"].split(";") if s.strip()),
         ))

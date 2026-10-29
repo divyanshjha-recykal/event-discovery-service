@@ -10,13 +10,15 @@ the model.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
+from urllib.parse import urlparse
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
 import httpx
 from openai import ContentFilterFinishReasonError, LengthFinishReasonError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from ..config import require
 from ..product_profile import Part, load_product_profile
@@ -32,7 +34,7 @@ OFFERS = "component_offers"
 FOCUS = "components"
 
 PLAN_BATCH = 16
-RESULTS_PER_SEARCH = 8
+RESULTS_PER_SEARCH = 5
 TEXT_CHARS = 3_000
 JUDGE_TEXT_CHARS = 1_400
 HIGHLIGHT_CHARS = 1_000
@@ -44,8 +46,9 @@ PRIORITY_SHARE = 0.8
 TOKENS_PLAN = 20_000
 TOKENS_JUDGE = 24_000
 OFFER_KINDS = ("newer model", "better spec", "more efficient")
-EFFORTS = ("drop-in", "minor changes", "major changes", "fit unclear")
+EFFORTS = ("drop-in", "minor changes", "major changes", "needs verification")
 PAGE_KINDS = ("seller listing", "manufacturer page", "other")
+SELLER_KINDS = ("maker", "authorised distributor", "other seller")
 
 
 class _PartPlan(BaseModel):
@@ -70,32 +73,36 @@ class _Check(BaseModel):
 
 class _Offer(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    index: int
     keep: bool
     product: str = Field(max_length=160)
+    maker: str = Field(max_length=80)
     seller: str = Field(max_length=120)
+    seller_kind: Literal[SELLER_KINDS]
     page_kind: Literal[PAGE_KINDS]
+    price: float | None
+    gst: Literal["included", "excluded", "not stated"]
+    currency: str = Field(max_length=8)
+    rupee_price: bool
+    price_unit: str = Field(max_length=60)
+    units_per_part: float | None
+    price_unclear: bool
+    in_stock: Literal["yes", "no", "not stated"]
     relation: Literal["same part", "alternative"]
     effort: Literal[EFFORTS]
     changes: str = Field(max_length=300)
     offers: list[Literal[OFFER_KINDS]]
     why: str = Field(max_length=400)
-    price: float | None
-    price_before_gst: float | None
-    price_unit: str = Field(max_length=60)
-    units_per_part: float | None
-    currency: str = Field(max_length=8)
-    gst: Literal["included", "excluded", "not stated"]
-    in_stock: Literal["yes", "no", "not stated"]
     checks: list[_Check]
+    certifications: list[str]
     discontinued: bool
     concerns: str = Field(max_length=300)
-    reason: str = Field(max_length=200)
+    reason: str = Field(max_length=80)
 
 
-class _Assessment(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    items: list[_Offer]
+def _assessment(pages: int) -> type[BaseModel]:
+    """One required slot per page, so a reply that leaves a page out fails instead of losing it."""
+    return create_model("_Assessment", __config__=ConfigDict(extra="forbid"),
+                        **{f"page_{i}": (_Offer, ...) for i in range(pages)})
 
 
 async def exa_product_search(query: str) -> list[dict]:
@@ -125,12 +132,17 @@ find newer, better or more efficient models that could replace it.
 - `same_part_query`: a description of the page wanted: an Indian seller's product page for
   the exact current model, with its manufacturer and model number from the brief, showing its
   price. Empty when the brief names no specific model or the part is not off the shelf.
-- `alternative_query`: a description of the page wanted: a product page for one model that
-  does this part's job, with the specs that matter (from Why chosen and Must have, else the
-  current model's own class and ratings), including newer models. Name no manufacturer or
-  model the brief does not name. Empty when the part is not off the shelf.
+- `alternative_query`: a description of the page wanted: an Indian seller's product page, with
+  its price, for a newer or more capable replacement for the current model (its successor from
+  the same maker, or an equivalent from another maker), naming the current model as what it
+  replaces and stating the needs as minimums ("at least …", from Why chosen and Must have,
+  else the current model's own class and ratings), never as the current model's exact figures,
+  which find the current model itself. Name no manufacturer or model the brief does not name.
+  Empty when the part is not off the shelf.
 - Write each as one plain sentence describing that page, about 15 to 25 words, not a list of
   keywords; the search engine matches pages to descriptions of them.
+- Leave compliance marks and certifications out of both searches; each page is checked for
+  them separately. Never name the current vendor in a search.
 
 PARTS:
 {listing}
@@ -141,56 +153,72 @@ PARTS:
     return [p for p in plan if p.part_id in {x.part_id for x in parts}]
 
 
-async def _assess(runtime: WorkflowRuntime, part: Part, pages: list[dict]) -> list[_Offer]:
+async def _assess(runtime: WorkflowRuntime, part: Part, pages: list[dict]) -> list[tuple[int, _Offer]]:
     listing = "\n\n".join(
-        f"[{i}] {p['title']}\n    {p['url']}\n    found by: {p['lane']} search\n"
+        f"[page_{i}] {p['title']}\n    {p['url']}\n    found by: {p['lane']} search\n"
         f"    highlights: {p['highlights'][:HIGHLIGHT_CHARS]}\n    text: {p['text'][:JUDGE_TEXT_CHARS]}"
         for i, p in enumerate(pages)
     )
     prompt = f"""## Objective
 These pages were found while looking for one part of a machine from other sellers, and for
-models that could replace it. Return one item per page.
+models that could replace it. Answer every page, each under its own key (page_0, page_1, …).
 
 ## Decide
 - `page_kind`: "seller listing" (a shop or distributor page where this one product can be bought
   or quoted), "manufacturer page" (the maker's own page for this one product), or "other".
 - `keep`: true only for a page about one specific product of the same kind as this part, made
   for the same use, and only when:
-  for the same part, it is a seller listing from which the part can be bought in India (a
-  rupee price, or an Indian seller that quotes on request);
-  for an alternative, it is a seller listing or a manufacturer page.
+  for the same part, it is a seller listing from which a private company can buy the part in
+  India (a rupee price, or an Indian seller that quotes on request); government-only
+  marketplaces such as GeM are not;
+  for an alternative, it is such a seller listing or a manufacturer page.
   False for datasheets, manuals, user guides and other documentation; parts-broker pages that
   list a part number with stock or price placeholders; price-comparison sites; category or
   listing pages; articles; products of a different kind or meant for a different use (a
-  household item for a machine part); and products that cannot do the job. `reason` says why.
-- `product`: name and model as the page gives them. `seller`: who sells it on this page.
+  household item for a machine part); products that cannot do the job; and listings the page
+  says are out of stock, sold out, unavailable, on pre-order or back-order; products the page
+  says are discontinued, end of life or no longer made; and listings priced in a currency other
+  than Indian rupees, since the business buys only in India. `reason` says why.
+- `product`: name and model as the page gives them. `maker`: who makes it, as the page names
+  them; empty when the page does not say. `seller`: who sells it on this page. `seller_kind`:
+  "maker" when the maker itself sells it; "authorised distributor" only when the page says the
+  seller is an authorised distributor or dealer of that maker; otherwise "other seller".
 - `relation`: "same part" when it is the current model, whoever sells it; otherwise "alternative".
 - `effort`: what switching to it would take in this machine.
   "drop-in": fits the current design as it is: same job, interfaces, size, mounting, ratings
   and software. Only when the page itself states the facts that matter for this part (size or
-  dimensions, electrical ratings, interface, mounting, and any safety rating or certification)
-  and they match the brief. A part with a safety function needs the same safety rating to be
-  drop-in. The same part is always drop-in.
+  dimensions, electrical ratings, interface and mounting) and they match the brief. A part with
+  a safety function needs the same safety rating to be drop-in. The same part is always drop-in.
   "minor changes": only a cable, connector, bracket or setting changes, and the page shows the
-  same interface and protocol, the same supply voltage, the same safety class and the same
-  mounting otherwise. When the page shows that a new driver or protocol, a different supply
-  voltage, a lower safety class or a new mount would be needed, it is "major changes"; when
-  the page does not say, it is "fit unclear".
+  same interface and protocol, the same supply voltage and the same mounting otherwise, and,
+  for a part with a safety function, the same safety class. When the page shows that a new
+  driver or protocol, a different supply voltage, a lower safety class or a new mount would be
+  needed, it is "major changes"; when
+  the page does not say, it is "needs verification".
   "major changes": redesign, a different software stack or drivers, porting or retraining
   models, new mounting, or requalification.
-  "fit unclear": the brief or the page lacks the facts needed to tell whether it would work
+  "needs verification": the brief or the page lacks the facts needed to tell whether it would work
   in this machine (load, size, mounting, ratings, features the use needs).
-  `changes` says what would have to change, or for "fit unclear" which facts are missing;
+  Fit is judged on the specs and description the page states. Certifications and compliance
+  marks are never fit facts: their absence never makes an option "needs verification",
+  "minor changes" or "major changes"; record the ones the page states in `certifications`.
+  `changes` says what would have to change, or for "needs verification" which facts are missing;
   empty for drop-in.
 - `offers`: what an alternative offers over the current part, from: "newer model" (a later
   version or successor), "better spec" (a spec that matters to this part is better), "more
   efficient" (lower power or losses). Empty when none, and for the same part. `why` gives
   the page's facts behind each one, or what the page offers for the same part.
-- `price`: the price for one unit exactly as the page states it, as a number; null when the page
-  shows none or says price on request. `currency` as written (INR, USD…). `gst`: whether that
-  price includes GST, as the page says. `price_before_gst`: the price before GST when the page
-  states it, or states the GST amount; the same as `price` when the price excludes GST; null
-  when the page gives no way to tell. `in_stock` as the page says.
+- `price`: the price exactly as the page states it, as a number; null when the page shows none
+  or says price on request. `currency` as written (INR, USD…); `rupee_price` true when the price
+  is in Indian rupees. `gst`: "included" when the page says incl. GST or inclusive of all taxes,
+  or gives an MRP (which in India includes all taxes); "excluded" when it says + GST, excl. GST
+  or ex-tax; "not stated" only when it says nothing about GST.
+- `in_stock`: "no" when the page says out of stock, sold out, unavailable, pre-order or
+  back-order, wherever on the page it says so; "yes" when it says in stock or shows a quantity
+  available; otherwise "not stated".
+- `price_unclear`: true when the price looks wrong for this product: far below what the other
+  pages here ask for the same product, contradicted elsewhere on the page, or the price of a
+  different item or an accessory; `concerns` says why.
 - `price_unit`: what that price buys, as the page states it ("1 piece", "1 metre", "pack of
   100", "90 m coil"). `units_per_part`: how many of those make one unit of this part as the
   brief's "Qty per machine" counts it: 1 when they are the same; 0.01 for a pack of 100 when
@@ -198,13 +226,17 @@ models that could replace it. Return one item per page.
   it is not clear what one unit of this part is, or what the page's price buys.
 - `checks`: one per Must have item in the brief, met / not met / unclear by the page's own specs;
   empty when the brief states no Must have.
+- `certifications`: the marks the page itself states for this product (for example CE, RoHS,
+  UL, UKCA, FCC, BIS), as written on the page; empty when it states none. Never add a mark the
+  page does not state.
 - `discontinued`: true when the page says this product is discontinued, end of life or no
   longer made.
 - `concerns`: anything else that may stop it replacing the current part (pack quantity,
   conflicting specs on the page, unclear seller, out of stock). Never repeat Must have results
   here, such as a compliance mark the page does not state; they belong in `checks` only.
-For a dropped page, decide only `keep` and `reason`; fill every other field with an empty
-value (empty text and lists, null numbers, "other", "fit unclear", "not stated", false).
+For a dropped page, decide only `keep` and `reason` (a few words, such as "Category page");
+fill every other field with an empty
+value (empty text and lists, null numbers, "other", "needs verification", "not stated", false).
 
 PART:
 {part.brief()}
@@ -213,72 +245,70 @@ PAGES:
 {listing}
 """
     runtime.budget.consume("analyze")
-    parsed = await w._structured(runtime, _Assessment, "component_assess",
+    parsed = await w._structured(runtime, _assessment(len(pages)), "component_assess",
                                  "Judge product pages for one part. Return JSON matching the supplied schema.",
                                  prompt, max_tokens=TOKENS_JUDGE)
-    return [o for o in parsed.items if 0 <= o.index < len(pages)]
+    return [(i, getattr(parsed, f"page_{i}")) for i in range(len(pages))]
 
 
-def _rupees(currency: str) -> bool:
-    return currency.strip().upper() in ("INR", "₹", "RS", "RS.")
+def price_difference(price: float | None, rupee_price: bool, units_per_part: float | None, rate: float | None,
+                     qty: float | None, gst: str = "not stated", gst_rate: float | None = None) -> dict:
+    """The seller's listed price against ours on the same GST basis, per our unit and per machine, in code.
 
-
-def price_difference(price: float | None, before_gst: float | None, currency: str, units_per_part: float | None,
-                     rate: float | None, qty: float | None, gst: str = "not stated", gst_rate: float | None = None) -> dict:
-    """The seller's price per our unit and per machine against the BOM rate (before GST), in code.
-
-    Compared only for a rupee price, a known rate and a known unit conversion. On the seller's
-    price before GST when the page gives it; otherwise on the price as shown, and `compared_on`
-    says which, so a GST-included price is never read as like for like.
+    The seller's price is never changed: when it includes GST, our rate has our GST added instead.
+    Compared only for a rupee price, a known rate and a known unit conversion.
     """
-    none = {"unit_price": None, "diff_pct": None, "machine_theirs": None, "machine_ours": None,
+    none = {"unit_price": None, "ours_unit": None, "diff_pct": None, "machine_theirs": None, "machine_ours": None,
             "saving_per_machine": None, "compared_on": None}
-    if price is None or not rate or not _rupees(currency) or not units_per_part:
+    if price is None or not rate or not rupee_price or not units_per_part:
         return none
-    basis = "before GST"
-    if before_gst is None and gst == "included" and gst_rate:
-        # The page gives only a GST-included price: take our GST rate off it, and say so.
-        before_gst, basis = price / (1 + gst_rate), f"before GST at our {gst_rate:.0%} rate"
-    unit_price = (before_gst if before_gst is not None else price) * units_per_part
-    per_machine = qty or 1
-    return {"unit_price": round(unit_price, 2), "diff_pct": round((unit_price - rate) / rate * 100, 1),
-            "machine_theirs": round(unit_price * per_machine, 2), "machine_ours": round(rate * per_machine, 2),
-            "saving_per_machine": round((rate - unit_price) * per_machine, 2),
-            "compared_on": basis if before_gst is not None else "price as shown"}
+    if gst == "included":
+        ours, basis = rate * (1 + gst_rate), "incl. GST"
+    else:
+        ours, basis = rate, "before GST" if gst == "excluded" else "GST not stated"
+    theirs, n = price * units_per_part, qty or 1
+    return {"unit_price": round(theirs, 2), "ours_unit": round(ours, 2), "diff_pct": round((theirs - ours) / ours * 100, 1),
+            "machine_theirs": round(theirs * n, 2), "machine_ours": round(ours * n, 2),
+            "saving_per_machine": round((ours - theirs) * n, 2), "compared_on": basis}
 
 
 def part_summary(rate: float | None, offers: list[dict]) -> str:
     """One line per part from the stored findings: lowest same-part price, then alternatives by effort."""
+    same_found = any(o["relation"] == "same part" for o in offers)
+    unclear = sum(1 for o in offers if o["relation"] == "same part" and o.get("price_unclear"))
+    offers = [o for o in offers if not o.get("price_unclear")]
     priced = sorted((o for o in offers if o["relation"] == "same part" and o["diff_pct"] is not None),
                     key=lambda o: o["diff_pct"])
     if priced:
         low = priced[0]
-        line = (f"Lowest same-part price: {_shown(low)} at {low['seller']}, {low['diff_pct']:+.0f}% vs ours"
+        d = price_display(low)
+        line = (f"Lowest same-part price: {d['listed']} at {d['seller']}, {d['versus']}"
                 + ("; our rate is the lowest found." if low["diff_pct"] >= 0 else "."))
-    elif any(o["relation"] == "same part" for o in offers):
-        line = "Same part found, but with no rupee price per our unit to compare."
+    elif same_found:
+        line = "Same part found, but with no clear rupee price to compare."
     else:
         line = "Same part not found from another seller."
     sellers = {o["seller"] for o in offers if o["relation"] == "same part"}
-    if sellers:
-        line += f" Same part from {len(sellers)} seller(s)."
-    alternatives = [o for o in offers if o["relation"] == "alternative"]
+    if sellers or unclear:
+        line += f" Same part from {len(sellers) + unclear} seller(s)" + (f", {unclear} with an unclear price." if unclear else ".")
+    unverified = sum(1 for o in offers if o["relation"] == "alternative" and o["effort"] == "needs verification")
+    alternatives = [o for o in offers if o["relation"] == "alternative" and o["effort"] != "needs verification"]
+    if unverified:
+        line += f" Needs verification: {unverified}."
     if not alternatives:
         return line + " No alternatives."
-    counts = ", ".join(f"{n} {e}" for e in EFFORTS if (n := sum(1 for o in alternatives if o["effort"] == e)))
+    makers = Counter(o["maker"].strip().lower() for o in alternatives if o.get("maker"))
+    shown = {o["maker"].strip().lower(): o["maker"].strip() for o in alternatives if o.get("maker")}
+    if makers:
+        line += " Makes found: " + ", ".join(f"{shown[m]} ({n})" for m, n in makers.most_common()) + "."
+    counts = ", ".join(f"{n} {e}" for e in EFFORTS[:3] if (n := sum(1 for o in alternatives if o["effort"] == e)))
     line += f" Alternatives: {counts}."
     for effort in ("drop-in", "minor changes"):
         cheaper = [o for o in alternatives if o["effort"] == effort and (o["diff_pct"] or 0) < 0]
         if cheaper:
             best = min(cheaper, key=lambda o: o["diff_pct"])
-            line += f" Cheapest {effort}: {best['product']} at {_shown(best)} ({best['diff_pct']:+.0f}%)."
+            line += f" Cheapest {effort}: {best['product']}, {price_display(best)['listed']} ({best['diff_pct']:+.0f}%)."
     return line
-
-
-def _shown(o: dict) -> str:
-    """The seller's price per our unit, with its GST basis."""
-    basis = o["compared_on"] if o["compared_on"].startswith("before GST") else f"GST {o['gst']}"
-    return f"₹{o['unit_price']:,.0f} per unit ({basis})"
 
 
 class OutdatedRunError(ValueError):
@@ -317,22 +347,55 @@ def reply_error(exc: Exception) -> str:
         thought = usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
         return (f"the model's reply was cut off at its {usage.completion_tokens:,}-token output limit"
                 + (f", {thought:,} of them spent reasoning" if thought else ""))
+    missing = [str(e["loc"][0]) for e in exc.errors() if e["type"] == "missing" and len(e["loc"]) == 1]         if isinstance(exc, ValidationError) else []
+    if missing:
+        return f"the reply left out {', '.join(missing)}"
     return f"{type(exc).__name__}: {exc}"[:300]
+
+
+def price_display(o: dict) -> dict:
+    """The same words for one finding's price on the page and in the email: as listed, and against ours on its GST basis."""
+    seller = o["seller"] or urlparse(o["url"]).netloc.removeprefix("www.")
+    kind = o.get("seller_kind")
+    out = {"seller": f"{seller} ({kind})" if kind in ("maker", "authorised distributor") else seller,
+           "listed": "Price not available", "each": "", "versus": "", "saving": "",
+           "doubt": "Price unclear" if o.get("price_unclear") else "",
+           "certifications": f"Certified: {', '.join(o['certifications'])}" if o.get("certifications") else ""}
+    if o["price"] is None:
+        return out
+    tag = {"included": "incl. GST", "excluded": "+ GST"}.get(o["gst"], "GST not stated")
+    lot = "" if o["units_per_part"] == 1 else f" for {o['price_unit'] or 'an unstated quantity'}"
+    out["listed"] = f"{'₹' if o.get('rupee_price') else o['currency'] + ' '}{o['price']:,.0f}{lot}, {tag}"
+    if o["unit_price"] is None:
+        return out
+    ours = "incl. GST" if o["compared_on"] == "incl. GST" else "+ GST"
+    if o["units_per_part"] != 1:
+        out["each"] = f"₹{o['unit_price']:,.0f} each"
+    out["versus"] = f"{o['diff_pct']:+.0f}% vs ours ₹{o.get('ours_unit') or o['rate']:,.0f} {ours}"
+    if o["saving_per_machine"] > 0:
+        out["saving"] = f"₹{o['saving_per_machine']:,.0f} per machine, {'incl.' if o['compared_on'] == 'incl. GST' else 'before'} GST"
+    return out
 
 
 def part_decision(offers: list[dict]) -> dict:
     """What one part's findings mean, in code: the best like-for-like option, or why there is none."""
-    like = [o for o in offers if o["diff_pct"] is not None and (o["relation"] == "same part" or o["effort"] == "drop-in")]
+    offers = [o for o in offers if not o.get("price_unclear")]  # an unclear price is shown, never counted
+    plain = lambda o: o.get("seller_kind") not in ("maker", "authorised distributor")  # noqa: E731
+    named = lambda o: "maker" not in o or bool(o["maker"])  # noqa: E731 — runs before makers were recorded keep theirs
+    like = [o for o in offers if o["diff_pct"] is not None
+            and (o["relation"] == "same part" or (o["effort"] == "drop-in" and named(o)))]
     best = min(like, key=lambda o: o["diff_pct"], default=None)
     same = min((o for o in offers if o["relation"] == "same part" and o["diff_pct"] is not None and o["diff_pct"] < 0),
-               key=lambda o: o["diff_pct"], default=None)
-    cheaper = [o for o in offers if o["diff_pct"] is not None and o["diff_pct"] < 0
+               key=lambda o: (plain(o), o["diff_pct"]), default=None)
+    cheaper = [o for o in offers if o["diff_pct"] is not None and o["diff_pct"] < 0 and named(o)
+               and all(c["status"] != "not met" for c in o["checks"])
                and o["relation"] == "alternative" and o["effort"] in ("drop-in", "minor changes", "major changes")]
-    alternative = min(cheaper, key=lambda o: (EFFORTS.index(o["effort"]), o["diff_pct"]), default=None)
-    # Better, newer or more efficient, and shown to fit: drop-in or minor changes, no must-have failed.
-    upgrades = [o for o in offers if o["relation"] == "alternative" and o["offers"]
-                and o["effort"] in ("drop-in", "minor changes") and all(c["status"] != "not met" for c in o["checks"])]
-    upgrade = min(upgrades, key=lambda o: (o["effort"] != "drop-in", -len(o["offers"]),
+    alternative = min(cheaper, key=lambda o: (EFFORTS.index(o["effort"]), plain(o), o["diff_pct"]), default=None)
+    # Better, newer or more efficient, no must-have failed; major changes included, after the rest, for procurement to weigh.
+    upgrades = [o for o in offers if o["relation"] == "alternative" and o["offers"] and named(o)
+                and o["effort"] in ("drop-in", "minor changes", "major changes")
+                and all(c["status"] != "not met" for c in o["checks"])]
+    upgrade = min(upgrades, key=lambda o: (EFFORTS.index(o["effort"]), plain(o), -len(o["offers"]),
                                             o["diff_pct"] if o["diff_pct"] is not None else float("inf")), default=None)
     # Like-for-like first: a cheaper option needing changes never hides that we already pay the lowest.
     if best and best["diff_pct"] < 0:
@@ -359,6 +422,8 @@ async def run_offers(db, run_id: str) -> dict:
     unjudged = {e["part_id"]: e["detail"] for e in journey if e.get("tool") == "assess" and e.get("outcome") == "failed"}
     by_part: dict[str, list[dict]] = {}
     async for o in db[OFFERS].find({"run_id": run_id}, {"_id": 0}):
+        if o.get("effort") == "fit unclear":
+            o["effort"] = "needs verification"
         if "unit_price" not in o:
             raise OutdatedRunError(f"run {run_id[:6]} was stored before per-unit pricing; delete it and start a new run")
         by_part.setdefault(o["part_id"], []).append(o)
@@ -366,9 +431,9 @@ async def run_offers(db, run_id: str) -> dict:
     parts, rows = [], []
     for p in planned:
         found = sorted(by_part.get(p["part_id"], []), key=lambda o: (
-            order["same part"] if o["relation"] == "same part" else order[o["effort"]],
+            order["same part"] if o["relation"] == "same part" else order[o["effort"]], bool(o.get("price_unclear")),
             o["diff_pct"] if o["diff_pct"] is not None else float("inf")))
-        base = {k: p.get(k) for k in ("part_id", "item", "subsystem", "rate", "qty", "gst")}
+        base = {k: p.get(k) for k in ("part_id", "item", "subsystem", "rate", "qty", "gst", "part_number")}
         base["line_cost"] = line_cost(p.get("rate"), p.get("qty"))
         if not p["off_the_shelf"]:
             rows.append({**base, "verdict": "Custom, not searched", "note": p["reason"], "findings": 0,
@@ -386,6 +451,8 @@ async def run_offers(db, run_id: str) -> dict:
                          "upgrades": 0,
                          "saving_per_machine": 0})
         else:
+            for o in found:
+                o["display"] = price_display(o)
             summary = part_summary(p["rate"], found) if found else "Nothing found."
             rows.append({**base, **part_decision(found), "note": summary, "findings": len(found)})
             if found:
@@ -409,7 +476,7 @@ async def run_offers(db, run_id: str) -> dict:
         "overview": overview, "rows": rows, "parts": parts,
         "same_part": sorted((r for r in rows if r.get("best_same")), key=lambda r: -r["best_same"]["saving_per_machine"]),
         "upgrades": sorted((r for r in rows if r.get("best_upgrade")),
-                           key=lambda r: (r["best_upgrade"]["effort"] != "drop-in", -r["line_cost"])),
+                           key=lambda r: (EFFORTS.index(r["best_upgrade"]["effort"]), -r["line_cost"])),
         "alternatives": sorted((r for r in rows if r.get("best_alternative")),
                                key=lambda r: (EFFORTS.index(r["best_alternative"]["effort"]),
                                               -r["best_alternative"]["saving_per_machine"])),
@@ -472,12 +539,25 @@ async def run_component_watch(db, product: str, model: str | None = None, run_id
                 plans.setdefault(p.part_id, p)
             await w._record(runtime, "plan", node="plan", outcome="ok", asked=len(batch), parts=[
                 {"part_id": x.part_id, "item": x.item, "subsystem": x.subsystem, "rate": x.rate, "qty": x.qty, "gst": x.gst,
+                 "part_number": x.part_number,
                  "off_the_shelf": plans[x.part_id].off_the_shelf, "reason": plans[x.part_id].reason,
                  "queries": [q for q in (plans[x.part_id].same_part_query, plans[x.part_id].alternative_query) if q]}
                 for x in batch if x.part_id in plans])
         unplanned = [x.part_id for x in parts if x.part_id not in plans]
         if unplanned:
             runtime.failures.append(f"the plan left out {len(unplanned)} part(s): {', '.join(unplanned)}")
+
+        def unusable(o: _Offer) -> str:
+            """Why a page goes no further, or empty: what cannot be bought in India is not stored."""
+            if not o.keep:
+                return o.reason
+            if o.in_stock == "no":
+                return "Out of stock"
+            if o.discontinued:
+                return "Discontinued"
+            if o.price is not None and not o.rupee_price:
+                return "Not sold in India"
+            return ""
 
         async def one_part(part: Part) -> None:
             plan = plans[part.part_id]
@@ -510,18 +590,17 @@ async def run_component_watch(db, product: str, model: str | None = None, run_id
                 counts["judged"] += 1
             now = datetime.now(timezone.utc)
             kept = []
-            for o in verdicts:
-                page = found[o.index]
-                if not o.keep:
+            for i, o in verdicts:
+                page = found[i]
+                if unusable(o):
                     counts["dropped"] += 1
                     continue
                 kept.append({
                     "offer_id": uuid4().hex[:10], "run_id": run_id, "product": profile.product,
-                    "part_id": part.part_id, "item": part.item, "rate": part.rate, "qty": part.qty,
+                    "part_id": part.part_id, "item": part.item, "rate": part.rate, "qty": part.qty, "gst_rate": part.gst,
                     "url": page["url"], "title": page["title"], "lane": page["lane"], "query": page["query"],
                     "found_at": now, **o.model_dump(exclude={"index", "keep", "reason"}),
-                    **price_difference(o.price, o.price_before_gst, o.currency, o.units_per_part, part.rate, part.qty,
-                                       o.gst, part.gst),
+                    **price_difference(o.price, o.rupee_price, o.units_per_part, part.rate, part.qty, o.gst, part.gst),
                 })
             if kept:
                 await db[OFFERS].insert_many([dict(k) for k in kept])
@@ -530,8 +609,8 @@ async def run_component_watch(db, product: str, model: str | None = None, run_id
                             considered=len(found),
                             kept=[{k: o[k] for k in ("product", "seller", "relation", "effort", "offers", "price",
                                                      "currency", "diff_pct", "url")} for o in kept],
-                            excluded=[{"title": found[o.index]["title"], "url": found[o.index]["url"], "reason": o.reason}
-                                      for o in verdicts if not o.keep])
+                            excluded=[{"title": found[i]["title"], "url": found[i]["url"], "reason": unusable(o)}
+                                      for i, o in verdicts if unusable(o)])
 
         shelf = [x for x in parts if x.part_id in plans and plans[x.part_id].off_the_shelf]
         # Named parts are always searched; otherwise the highest-spend parts, unless every part is asked for.

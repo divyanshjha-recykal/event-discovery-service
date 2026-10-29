@@ -1,7 +1,7 @@
 [project]
 name = "opportunity-radar"
 version = "0.1.0"
-description = "Discovers awards, grants, and events relevant to Recykal and evaluates eligibility against the business profile."
+description = "Discovers awards, grants, and events relevant to Retearn and evaluates eligibility against the business profile."
 requires-python = ">=3.11"
 dependencies = [
     # Bounded Discovery graph (Stage 3) and the callback plumbing tracing rides on.

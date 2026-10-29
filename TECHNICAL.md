@@ -1,1177 +1,699 @@
-# TECHNICAL.md — Opportunity Radar, Phase 1 checkpoint
+# TECHNICAL.md — Opportunity Radar
 
-**Status:** Phase 1 complete (Stages 0–6 per `CLAUDE.md`). Last verified clean run:
-`qwen/qwen3-32b`, 32/50 tool calls, 4 opportunities saved, 0 rejected, 0 failed.
+**As of 27 October 2026.** Branch `@Phase2-improvements`. Last commit `789c9d3` ("Phase 2 Checkpoint:
+working pipelines"), plus uncommitted demo-freeze changes in 9 files (component watch, its page,
+email, workbook loader, AUDIT, ledger).
 
-**Purpose of this document.** A single technical reference for the system as it
-actually stands — every component, flow, contract, limit and known defect — written
-so that Phase 2 can be planned against facts rather than impressions. Every claim
-below is verified against the code at the commit this was written on; file and line
-references are given so anything can be checked.
+**What this document is for.** This document gives the full picture of the project in one place:
+what it is, who it is for, how each pipeline works, what state each one is in, the rules the work
+follows, and what comes next. It is written so it can be handed to Claude (or a new engineer) as
+the whole context. It replaces the Phase 1 version of this file, which is still in git history at
+`704d09b`.
 
-**Authority.** `CLAUDE.md` remains the spec. This document describes the
-implementation of that spec, including the places where implementation and spec have
-drifted. Where they disagree, that disagreement is called out explicitly.
-
----
-
-
-
-## 1. What the system does
-
-Given a business described in `BusinessProfile.md`, the pipeline:
-
-1. plans web searches for awards and recognition programmes the business could enter,
-2. searches, selects promising results, and fetches their pages,
-3. identifies distinct opportunities on each site and decides whether to pursue them,
-4. extracts a structured record per opportunity,
-5. checks it is still actionable, stores it, and records the edition against a
-  recurring-programme registry,
-6. judges the stored eligibility conditions against the full business profile,
-7. presents all of it on a single read-only page.
-
-**It is decision support only.** Nothing submits an application, contacts an award
-body, or writes to the business profile. The last action in the pipeline is always a
-stored record.
-
-**Scope note.** Grants, funding and fellowships are excluded from discovery — the
-business wants recognition, not money. `"grant"` remains in the stored `category`
-enum for backward compatibility with records already saved, but nothing new should
-arrive with it.
+**Where the detail lives:**
+- `AUDIT.md` holds the change log (rows 1–105), the Phase 2 plan (workstreams W1–W9) and the
+  Phase 1 audit.
+- `reference/spend-ledger.md` records every live run that spent credits.
+- `CLAUDE.md` is empty. The Phase 1 spec it held is out of date; rewriting it is a W8 task.
 
 ---
 
+## 1. What it is
 
+**Opportunity Radar** is an agentic research system built for **Retearn**, which makes reverse
+vending machines (RVMs) and deposit-return system infrastructure. Retearn sits within the Recykal
+group. The system is built for Retearn and can be adapted for Recykal later. Retearn buys only in
+India.
 
-## 2. Runtime topology
+It supports decisions and never acts on them. It never submits an application, contacts an
+organiser or seller, or places an order. Every pipeline ends with stored records, a dashboard view
+and an optional email to a fixed recipient list.
 
-Docker Compose only; no cloud hosting in Phase 1. Seven containers.
+It has three pipelines (called "tracks" in the UI). They share one codebase, one database, one
+dashboard and one mailer.
 
-
-| Service           | Image                        | Port                | Purpose                                                    |
-| ----------------- | ---------------------------- | ------------------- | ---------------------------------------------------------- |
-| `mongodb`         | `mongo:7`                    | 127.0.0.1:27017     | `opportunities`, `programs`, `runs`, `extraction_failures` |
-| `langfuse-web`    | `langfuse/langfuse:4`        | 3000                | Trace UI                                                   |
-| `langfuse-worker` | `langfuse/langfuse-worker:4` | 127.0.0.1:3030      | Trace ingestion                                            |
-| `postgres`        | `postgres:17`                | 127.0.0.1:5432      | Langfuse metadata                                          |
-| `clickhouse`      | `clickhouse-server:25.12`    | 127.0.0.1:8123/9000 | Langfuse trace store                                       |
-| `redis`           | `redis:7`                    | 127.0.0.1:6379      | Langfuse queue                                             |
-| `minio`           | `chainguard/minio`           | 127.0.0.1:9090/9091 | Langfuse blob store                                        |
-
-
-Six of the seven exist because Langfuse v3+ requires them. That is upstream's design,
-accepted knowingly (`CLAUDE.md` constraint).
-
-The application itself is **not containerised** — FastAPI runs on the host via
-`uvicorn`, and serves the built React SPA from `frontend/dist` as static files.
-
-### External services
-
-
-| Service    | Used for              | Configured by                            |
-| ---------- | --------------------- | ---------------------------------------- |
-| OpenRouter | every LLM call        | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` |
-| Tavily     | web search            | `TAVILY_API_KEY`                         |
-| Firecrawl  | page fetch → markdown | `FIRECRAWL_API_KEY`                      |
-
-
-
-
-### Configuration contract
-
-All configuration is environment-driven via `.env` (gitignored, never committed).
-`config.py:require()` raises rather than defaulting, so a missing variable fails
-loudly instead of running against the wrong model or an untraced endpoint.
-
-**The model is never hardcoded anywhere.** `chat_model()` reads `OPENROUTER_MODEL`,
-and a per-call `model` argument overrides it — that is how two models are compared in
-one run.
-
-Notable variables:
-
-- `OPENROUTER_MODEL` — the one reasoning model used by **every** node and stage.
-- `OPENROUTER_TEMPERATURE` — applies to **Discovery only**. Unset means provider
-default. Extraction and eligibility deliberately do not read it
-(`config.py:58-76`).
-- `OPENROUTER_RERANK_MODEL=cohere/rerank-4-fast` — **declared in** `.env.example` **but
-read by no code.** Left over from a deleted experiment (see §12).
-- `MONGO_URI`, `MONGO_DB_NAME` — note the names; not `MONGODB_URI`.
-- `BUSINESS_PROFILE_PATH` — optional, defaults to `BusinessProfile.md` at repo root.
+| Pipeline | Question it answers | Input | Output | State after the Phase 2 review |
+|---|---|---|---|---|
+| **Opportunity discovery** (Awards, Events, Research, Everything) | Which awards, events and research venues can Retearn enter now? | `BusinessProfile.v2.md` | Opportunity records with a verdict on each entry condition (or a research-fit table) | Works; proven on many runs. Review focus moved to the two watch pipelines |
+| **Competitor watch** (the "news" pipeline) | What have competitors and the RVM / deposit-return market done since the last run? | `docs/Competitors.xlsx` + business profile | Signals grouped into 5 digest sections, plus an email digest | **The safest pipeline; nobody raised issues in the review.** Parked since baseline run 5b67df |
+| **Component watch** | For each part in a machine's BOM: is the same part cheaper elsewhere, and is there a better or cheaper alternative? | `docs/products/<machine>/ProductProfile.<M>.xlsx` | A verdict per part and three decision sections, plus email and CSV | **Needs course correction.** It does not match what the teams need; see §9 |
 
 ---
 
+## 2. Review outcome and what it means (27 Oct 2026)
 
+- **Competitor watch (news):** accepted as it is. It is the safest pipeline. Next steps are
+  scheduling and the newsletter (§12.2).
+- **Component watch:** the biggest risk of something going wrong, and the build does not match
+  the teams' requirements. It needs a course correction before any more tuning. §9.4 lists the
+  gaps already known against the original W9 plan and engineers' feedback F23.
+- **Opportunity discovery:** stable. Remaining work is measurement, caching and cataloguing
+  (W1, W2, W5).
 
-## 3. Repository map
+> The review's specific requirements for component watch are not yet written down in this repo.
+> Add them to §9.4 when they arrive. Until then, §9.4 lists only the gaps that are documented.
 
-~5,200 lines of Python across 34 modules, plus a ~2,000-line React frontend.
+---
+
+## 3. Runtime and stack
+
+**Runs on:** a Windows laptop. Docker Compose provides the services; there is no cloud hosting.
+
+| Piece | Technology | Notes |
+|---|---|---|
+| Backend | Python ≥3.11, FastAPI + uvicorn, run on the host (not in a container) | `src/opportunity_radar/api/app.py`; also serves the built SPA from `frontend/dist` |
+| Orchestration | LangGraph (`StateGraph`, `Send`, `Command`) for opportunity discovery; plain asyncio for both watch pipelines | Checkpoints stored in Mongo through `langgraph-checkpoint-mongodb` |
+| LLM | OpenRouter (OpenAI-compatible) through `langchain-openai` `ChatOpenAI` | The model is never hardcoded: `OPENROUTER_MODEL` or a per-run override. Phase 2 runs use `deepseek/deepseek-v4.1-flash`; `qwen/qwen3-32b` was the Phase 1 default |
+| Search | **Exa** by default (`/search` with summary, highlights and text); Tavily still selectable for discovery | Exa costs about $0.014 per search on a free monthly credit of $20 |
+| Page fetch | Firecrawl, **opportunity discovery only** | Paced one request at a time (`FIRECRAWL_MIN_INTERVAL=7s`) for the free tier's per-minute cap; 1,000 per month, resetting on the 21st. **The watch pipelines never use Firecrawl.** |
+| Database | MongoDB 7 (`docker-compose.yml`), PyMongo's native `AsyncMongoClient` | Bound to 127.0.0.1 |
+| Tracing | Langfuse v3+ in a separate, on-demand stack (`docker-compose.langfuse.yml`) | Start with `up -d`; stop and wipe with `down -v`. The pipeline runs untraced while it is stopped. Moved out on 20 Oct after ClickHouse filled the disk (row 72) |
+| Frontend | React 18 + react-router-dom 6 + Vite 6 | No UI framework or icon package; one stylesheet of CSS custom properties |
+| Spreadsheets | `openpyxl` | Product workbook, competitor list |
+| Mail | SMTP (Gmail app password) | Recipients come only from `SMTP_TO` |
+
+**Configuration** comes from `.env` (gitignored; `.env.example` lists the names).
+`config.require()` raises an error when a value is missing; it never falls back to a default.
+Main names: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`,
+`SEARCH_PROVIDER`, `MONGO_URI`, `MONGO_DB_NAME`, `LANGFUSE_*`, `SMTP_*`.
+`OPENROUTER_RERANK_MODEL` is declared but read by no code.
+
+**Setup**
+```bash
+docker compose up -d                                   # MongoDB
+docker compose -f docker-compose.langfuse.yml up -d    # optional tracing
+uv sync
+uv run uvicorn opportunity_radar.api.app:app           # API + built SPA
+cd frontend && npm run build                           # (re)build the SPA
+```
+
+---
+
+## 4. Repository map
+
+About 10,500 lines of Python (about 1,700 of them in `scripts/`) and about 3,000 lines of React.
 
 ```
+BusinessProfile.v2.md          the business profile every opportunity/competitor prompt reads (fixed sections)
+BusinessProfile.md             older profile, kept; v2 is the one loaded
+AUDIT.md                       change log rows 1–105, Phase 2 plan W1–W9, Phase 1 audit
+docs/
+  products/machines.json       product line: ACE, PRO, NEO, FastScan, Global RVM, Line
+  products/ace/ProductProfile.ACE.xlsx   ACE parts workbook (gitignored; the only machine with one)
+  Competitors.xlsx             watched competitors (gitignored)
+  SourcingSites.xlsx           19 seller sites; NOT used by the pipeline (vendors are discovered, not listed)
+  *BOM.xlsx                    source BOMs: ACE, Embedded ACE, FastScan, Embedded FastScan, Global RVM, Mini
+  graph.md / solution-flow.md  diagrams of the discovery graph
+reference/
+  spend-ledger.md              every credit-spending run
+  exa-pool-652ec9.json, search-tests/   saved search pools for offline re-ranking
 src/opportunity_radar/
-├── config.py            env contract; require() raises on missing
-├── tracing.py           chat_model(), trace_handler(), stage_span()
-├── profile.py           loads BusinessProfile.md
-├── paths.py             repo-root anchored paths
-│
-├── discovery/           ← the agentic half
-│   ├── agent.py         run_discovery() — public runner, run records, status
-│   ├── workflow.py      the LangGraph graph, all 4 nodes, all 4 prompts  (1,084 ln)
-│   ├── state.py         DiscoveryState, EvidenceBundle, CandidateVerdict, runtime
-│   ├── budget.py        RunBudget — hard caps enforced in the tool wrapper
-│   ├── providers.py     tavily_search(), firecrawl_fetch()
-│   ├── link_resolver.py bounded same-site traversal, URL canonicalisation
-│   ├── profile_seed.py  distils BusinessProfile.md for the planner
-│   └── actionability.py date arithmetic + HTTP status; completeness checks
-│
-├── extraction/          ← plain functions, not an agent
-│   ├── extract.py       extract() → record | typed failure            (520 ln)
-│   ├── schema.py        OpportunityRecord, strict pydantic validation
-│   ├── failures.py      FailureReason enum
-│   ├── grounding.py     deadline_verified — string check, not model opinion
-│   ├── base_title.py    edition/year stripping — 16 regexes (see §11)
-│   └── golden.py        loads golden_set/extraction-examples.md
-│
-├── eligibility/         ← one LLM call per opportunity
-│   ├── evaluate.py      evaluate() / evaluate_criteria()
-│   ├── schema.py        CriterionResult, QualitativeNote, EligibilityResult
-│   ├── scoring.py       confidence, score, classification audit — all plain fns
-│   └── criteria_sets.py loads the 5 hand-written reference sets
-│
-├── storage/
-│   ├── client.py        AsyncMongoClient; unique identity indexes
-│   ├── identity.py      normalisation for the identity keys
-│   ├── opportunities.py save_opportunity() atomic upsert; attach_eligibility()
-│   ├── programs.py      record_edition(), due_soon(), known_orgs(), typical_window
-│   ├── runs.py          run records + append-as-you-go journey
-│   └── failures.py      extraction failure records
-│
-└── api/app.py           FastAPI — reads, run triggers, delta feed       (542 ln)
-
+  config.py tracing.py paths.py        env contract, Langfuse + chat model, repo paths
+  profile.py                           loads BusinessProfile.v2.md; profile_section / without_sections
+  product_profile.py                   loads and validates the machine parts workbook
+  reporting.py                         CSVs and HTML/plain emails for all three pipelines
+  discovery/
+    workflow.py      (2,289 ln)        opportunity graph: plan → search → rank → fetch → extract → evaluate → store
+    types.py                           TypeSpec per opportunity type (any/award/event/research), tracks
+    providers.py                       Exa + Tavily search, Firecrawl fetch (paced), link parsing
+    link_resolver.py                   bounded same-site traversal, URL canonicalisation, content keys
+    agent.py                           run_discovery(): runner, run records, status
+    budget.py                          RunBudget: hard caps enforced in code
+    state.py                           DiscoveryState, WorkflowRuntime, dataclasses
+    actionability.py                   date arithmetic + HTTP status, completeness
+    competitor_watch.py (383 ln)       competitor/market news pipeline
+    component_watch.py  (642 ln)       BOM component pipeline
+  extraction/                          record schema, base-title edition strip, deadline grounding, failures
+  eligibility/                         condition-by-condition verdicts vs profile; scoring in code
+  storage/                             Mongo client, identity keys, opportunities, programs, runs, failures, dead ends
+  api/app.py          (795 ln)         FastAPI: run triggers, reads, delta feed, email, delete/clear
 frontend/src/
-├── main.jsx             BrowserRouter mount
-├── App.jsx              layout shell, routes, run lifecycle, config persistence
-├── api.js               fetch helper, stage maps, config <-> request mapping
-├── export.js            CSV builders, download, clipboard
-├── icons.jsx            inline stroke icons (no icon dependency)
-├── styles.css           design tokens, light/dark, all layout
-└── components/
-    ├── Sidebar.jsx      configurator, budget caps, run list, collapse rail
-    ├── RunView.jsx      one run: header, meters, tabs, delta polling
-    ├── Journey.jsx      stage passes, step cards, reasoning, final output
-    ├── Opportunity.jsx  one stored record with its eligibility table
-    ├── Overview.jsx     everything stored across all runs + programme registry
-    └── ExportPanel.jsx  CSV preview, download and copy
-
-golden_set/              Stage 0 reference data (extraction + eligibility)
-retrieval_set/           207 hand-labelled search results (see §13)
-scripts/                 run_discovery, run_eligibility, run_golden_set, smoke tests
+  App.jsx api.js export.js
+  components/ Sidebar RunView Journey Opportunity Overview ExportPanel Signals Components
+scripts/
+  run_discovery.py competitor_watch.py component_watch.py   CLI runners (component: --only, --all, --test-db)
+  search_only.py rank_pool.py          plan+search with no scraping; re-rank a saved pool (one model call)
+  email_report.py inspect_state.py show_*.py smoke_*.py verify_storage.py draw_*.py
 ```
 
-Frontend dependencies are React, `react-router-dom` and Vite. No UI framework, no
-icon package, no CSS framework — icons are inline SVG and styling is one stylesheet of
-CSS custom properties. Geist and Geist Mono load from Google Fonts with a full system
-fallback stack, so an offline first paint still renders correctly.
+---
+
+## 5. Shared machinery (all pipelines)
+
+### 5.1 Model calls — `workflow._structured()`
+- Every call returns **strict `json_schema`** output validated by Pydantic. `_strict_schema()` marks
+  every property required, so OpenAI-strict providers accept it.
+- Eligibility is the one exception: it still uses `json_object`.
+- **Per-call output budgets:**
+
+  | Call | Max output tokens |
+  |---|---|
+  | plan and search step | 20k |
+  | rank | 24k |
+  | analyze | 20k |
+  | research fit | 20k |
+  | competitor judge | 20k |
+  | component plan | 20k |
+  | component judge | **24k** (the user's ceiling; do not raise it) |
+
+- **Reasoning:** each call asks for a reasoning cap of 40% of its budget, with reasoning excluded
+  from the reply. The provider treats this cap as advisory, so the budget must hold both the
+  reasoning and the answer. Hitting the cap is a known failure mode: replies get cut off (rows 89,
+  103).
+- **Timeouts:** 180 s per call, or 300 s for heavy calls, enforced by the caller with
+  `asyncio.wait_for`. The HTTP client also has its own 90 s timeout and one retry.
+- **When validation fails:** over-long strings and lists are trimmed and the reply is validated
+  again. Discovery's per-site analysis can also keep the list items that validate.
+  `_parse_json(strict=False)` accepts raw control characters copied from pages (row 87).
+- **Tracing:** every call carries a Langfuse `trace_handler()`, and nodes are wrapped in
+  `stage_span()`.
+
+### 5.2 Budget — `RunBudget`
+- Hard caps on tool calls, searches, scrapes, LLM calls and wall-clock time, enforced in code. A
+  prompt asking the model to be frugal is not a budget.
+- **Default caps:**
+
+  | Pipeline | Tool calls | Searches | Scrapes | LLM calls | Wall clock |
+  |---|---|---|---|---|---|
+  | Discovery | 70 | 8 | 20 | 30 | 1,500 s |
+  | Competitor | 80 | 40 | — | 15 | — |
+  | Component | 240 | 150 | — | 80 | — |
+
+- `POST /api/runs/{id}/stop` cancels a run. Stop uses an in-process registry, so it does not
+  survive a server restart.
+
+### 5.3 Runs and the journey
+- Each run gets one document in `runs`: run_id, model, status, caps plus live counters, counts,
+  warnings, failures, summary and journey.
+- Journey rows are appended **as each step finishes**, so a crashed run still leaves a trail. The
+  UI polls `/api/runs/{id}/events?after=N`, which returns only rows it has not seen.
+- On startup, the server marks any run left `running` as failed (row 88).
+
+### 5.4 Fail loudly
+- A broken step stops the run with its error; there is no quiet fallback. Examples: a planning
+  failure, a failed search, a bad sheet, a plan that leaves a part out.
+- One planned exception: in component watch, a fault in **one part's judge reply** marks that part
+  "Could not be judged" and the run goes on. A systemic fault (budget, timeout, rate limit, auth)
+  still stops the run.
+- Known leftover: the LangGraph progress saver falls back to in-memory storage when Mongo is
+  unreachable (AUDIT item 26).
 
 ---
 
+## 6. Opportunity discovery (Awards / Events / Research / Everything)
 
-
-## 4. Data model
-
-
-
-### `opportunities`
-
-Identity key: `norm_organizing_body + norm_base_title + cycle_year`, **unique index**
-(`storage/client.py:33-37`). "Never a duplicate" is enforced at the database, not in
-application logic, so a bug in the upsert path surfaces as an error rather than a
-silent duplicate.
-
+### 6.1 Graph
 ```
-title, organizing_body, base_title, cycle_year, category
-eligibility_criteria: [str]        # individually stated conditions
-submission_deadline: str|null      # ISO
-deadline_note: str|null            # for rolling/relative deadlines
-deadline_verified: bool            # grounding check, never the model's opinion
-event_date: str|null
-source_url, evidence_urls: [str]
-actionability: "actionable"        # only actionable records are stored
-extraction_completeness: {score, identity, open_state, deadline,
-                          eligibility, source_coverage, gaps[]}
-judging_criteria: [str]            # from analyze
-application_requirements: [str]    # from analyze
-confidence_note: str|null          # the extractor's own stated uncertainty
-discovery_run_id                   # last run to write this record, not an owner
-eligibility: {…}                   # attached later by the Eligibility Agent
+START → plan → search (opening searches + up to 3 ReAct steps) → rank ─┬→ fetch ×N (one per site, parallel) → extract ×N → evaluate → store → END
+                                                                         ├→ plan   (nothing passed, once, budget left)
+                                                                         └→ evaluate
+evaluate → plan (nothing found anywhere, at most once)  |  evaluate → store
 ```
+- A failed or duplicate fetch still passes through `extract` with `bundle=None`. LangGraph's
+  `defer` does not wait for `Send` branches, so this is how every site fans in together
+  (row 88).
+- Saved progress lives in Mongo (`run_progress`, `run_progress_writes`).
 
-Two fields deserve a note.
+### 6.2 Type specs — `discovery/types.py`
+- Each type (`any`, `award`, `event`, `research`) is defined as data: its noun, brief, market
+  rule, query examples, rank conditions and order, link checklist and record guide.
+- **Research** has two tracks: core technology, and research topics / current work.
+- **Everything** (`any`) has three tracks (award, event, research), and each track follows its own
+  type's rules.
+- Geography and sector come only from the profile's **Search constraints** and **Search angles**
+  sections, never from code.
 
-`confidence_note` is the model's one-sentence statement of what it was unsure about.
-The extraction schema has always required it, but `_build_record()` never read it, so
-it was generated and discarded on every extraction. It is now stored, traced and
-displayed. **This field is not in `CLAUDE.md`'s schema** — it is an additive, optional
-extension.
+### 6.3 Nodes
 
-`discovery_run_id` records the **last** run to write the record, not the run that owns
-it. Because records are upserted on their identity key, a later run that re-finds the
-same opportunity overwrites it. Nothing should treat this field as "which run found
-this" — the per-run views derive that from each run's own journey instead.
+**1. Plan**
+- Writes the opening searches: at least 2, or one per track.
+- Each query describes **the page wanted** (Exa's documented practice), for example "nominations
+  page for a national award recognising … in …".
+- Queries never name a venue or programme from the model's memory (row 57).
 
+**2. Search**
+- Runs on Exa with a per-result **structured summary**: programme name, organiser, entry deadline,
+  event date, who can enter, country restriction, date quote, key dates, entry status, opportunity
+  type and sponsor.
+- Highlights are aimed at entry details; research queries use query-guided highlights instead.
+- Results that are duplicates by content key or programme key are dropped and logged.
+- After the opening searches comes a **ReAct loop** of up to 3 steps. Each step sees every search's
+  results (counts by type, past dates, duplicates, titles), writes an assessment and its gaps, then
+  runs one more search or stops.
 
+**3. Rank**
+- One model call orders the whole pool best-first against the type's numbered conditions:
+  - its own page, not a listing or tracker
+  - Retearn can enter (company, not individual or student)
+  - open (dates decide only open or closed)
+  - distinct (one seat per programme)
+- It also returns up to 8 excluded results, each with a reason.
+- The order is fit, then standing; a sooner deadline only breaks ties. Picks are sized to the
+  scrape budget, and each research track gets a seat.
+- Nothing is dropped by keyword or regex.
 
-### `programs`
+**4. Fetch** (one per site, in parallel)
+- Firecrawl reads the seed page; the first page also requests `rawHtml`, so menu links count.
+- A link picker reads the page's first 3,000 characters, states what is covered and what is
+  missing, then picks 0–2 of up to 60 links.
+- Limits: depth and pages per site are configurable.
+- Dead ends (seen empty at least twice) are skipped.
 
-Identity key: `norm_organizing_body + norm_base_title` (no year), unique index. One
-document per recurring programme; each year it runs is an edition.
+**5. Extract** (one per site)
+- Under 400 characters of evidence counts as a failed fetch.
+- Otherwise one analysis call names the distinct opportunities on the site and decides pursue or
+  skip for each. A record then carries:
+  - entry conditions
+  - judging criteria
+  - application requirements
+  - a summary
+  - dated steps
+- Quotes are checked for three fields: organiser, deadline and status. A failed check is recorded,
+  and nothing is rejected on it.
+- `base_title` (edition stripped in code) feeds the identity key.
+- An early-bird date is never the deadline (row 61).
 
-```
-organizing_body, base_title
-editions: [{year, deadline}]
-typical_window: {month_start, month_end} | null   # null until 2+ dated editions
-```
+**6. Evaluate**
+- Awards and events: `evaluate_criteria()` judges each condition met / not_met / unclear against
+  the **full profile**, plus qualitative notes. `confidence` and `score` are computed in code,
+  never self-reported.
+- Research: `_research_fit()` writes fits / partly / no for each research topic and in-house work
+  line, with the matching call topic and a venue note.
 
-`typical_window` is computed on a **12-month circle**, so a programme running Nov–Jan
-yields `{11, 1}` rather than the nonsensical `{1, 11}` a naive min/max gives
-(`storage/programs.py:26-49`).
+**7. Store**
+- An atomic upsert on a **unique index** of normalised organiser + base title + cycle year, so
+  duplicates are impossible at the database.
+- Also records the edition in `programs` (typical window on a 12-month circle).
 
-`record_edition()` is wired inside `save_opportunity()` rather than at the call site,
-so the registry cannot drift out of sync with what was actually stored
-(`storage/opportunities.py:56-63`).
+### 6.4 Measured (end of Phase 1, DeepSeek V4.1 Flash, Exa)
 
-### `runs`
+| Measure | Value |
+|---|---|
+| Model calls per run | 16–19 |
+| Model cost per run | ~$0.05 |
+| Exa searches per run | 4–5 (~$0.06–0.07) |
+| Scrapes per run | 4–14 |
+| Wall time | 5–15 min (paced scraping and model thinking) |
+| Opportunities saved per run | 1–6 |
 
-One document per run, with the journey appended **as it happens** so a crashed run
-still leaves a readable trail.
-
-```
-run_id, model, status, started_at, finished_at
-budget:   { tool_calls, max_searches, max_scrapes, max_llm_calls,
-            wall_clock_seconds,            # the caps this run was configured with
-            spent, searches, scrapes, llm_calls, elapsed,   # live counters
-            stop_reason }
-counts:   { searched, scraped, extracted, extraction_failed,
-            saved, rejected, historical, failed }
-queries:  [str]        # caller-supplied, empty when the planner wrote the plan
-thinking: [str]        # each planned query with its rationale
-warnings: [str]        # per-record caveats, accumulated
-failures: [str]        # provider and model failures during the run
-summary, trace_url
-journey:  [ … ]        # one row per tool call
-eligibility_done, eligibility_evaluated, eligibility_failures
-```
-
-`budget` carries both the caps and the live counters. `append_event()` `$set`s the
-counters on every journey push, which is what lets the UI meter a run while it is still
-going; `finish_run()` rewrites the whole field with `caps() | live()`. An earlier
-version wrote only the counters at the end, silently dropping the caps.
-
-`warnings` and `failures` were computed on every run and never persisted, so nothing
-downstream could show that a stored record came with caveats.
-
-**Journey rows** are `{seq, t, tool, node, outcome, …}` where `seq` is the 1-based
-position. Because `_record()` swallows a failed Mongo write, `seq` can contain gaps
-while positions stay contiguous — which is why the delta endpoint slices by position
-rather than by `seq`.
-
-A `scrape` row additionally carries `page_title`, `page_description`, `links_found`,
-and `preview` — the first 20,000 characters of the fetched markdown, the same bound
-extraction reads, so what the model actually saw is inspectable after the fact.
-
-### `extraction_failures`
-
-Typed failures keyed by source URL, cleared when a later run succeeds on the same URL.
-
-### Identity normalisation
-
-`storage/identity.py:26-41` — NFKD unaccent, lowercase, strip punctuation, collapse
-whitespace, drop a leading article. `"  The  CII, Ltd. "` → `"cii ltd"`.
-
-**Deliberately no alias table.** The system does not know that "CII" and
-"Confederation of Indian Industry" are one body, and treats them as two programmes.
-Known and accepted limit.
-
----
-
-
-
-## 5. The discovery graph, in detail
-
-### Why a graph rather than a free-form agent
-
-The Discovery Agent is a **bounded LangGraph state machine**, not a model in a
-tool-calling loop. The model makes every judgement that requires reading meaning —
-what to search for, which results matter, which links to follow, what counts as an
-opportunity, whether to pursue it — but it never decides *what happens next*. The
-sequence of stages, the caps on each, and the single re-plan are fixed in code.
-
-This matters for cost and for reproducibility. A free-form agent can spend an
-unbounded number of calls deciding it needs one more search; this graph cannot. Every
-run visits the same four nodes in the same order, and the only branch is a single
-optional loop back to planning.
-
-### The state object
-
-`DiscoveryState` (`discovery/state.py`) is a `TypedDict` threaded through every node.
-LangGraph merges each node's returned dict into it.
-
-| Field | Written by | Carries |
-| --- | --- | --- |
-| `as_of_date` | runner | The run date, injected so "this year" is never the model's guess |
-| `supplied_queries` | runner | Caller-supplied queries; non-empty disables planning **and** re-planning |
-| `memory` | `plan_queries` | Distilled profile + known organising bodies + programmes due soon |
-| `planned_queries` | `plan_queries` | `PlannedQuery(query, intent, geography, target_year, rationale)` |
-| `search_hits` | `research` | Every `SearchHit` seen this run, deduplicated by canonical URL |
-| `evidence_bundles` | `research` | `EvidenceBundle(seed_url, pages)` — the fetched pages per seed |
-| `candidates` | `analyze` | `CandidateVerdict` — one per opportunity identified, pursue or skip |
-| `analyzed_seeds` | `analyze` | Seeds already analysed, so a re-plan does not pay to analyse them twice |
-| `analysis_errors` | `analyze` | Per-bundle failures, which also suppress the re-plan |
-| `rejected` | `finalize` | Candidates that did not become records, with the stage that stopped them |
-| `summary` | `finalize` | One-line account of the run |
-| `replan_count` | `analyze` | Incremented only when a pass yielded nothing; caps the loop |
-
-Alongside it, `WorkflowRuntime` is a plain dataclass holding the things that are *not*
-graph state — the database handle, the `RunBudget`, the model id, the run id, and the
-accumulating `journey`, `saved`, `failures`, `warnings` and `historical` lists. It is
-bound into each node with `functools.partial`, so nodes stay pure functions of state
-plus services.
-
-### Graph shape
-
-```
-START → plan_queries → research → analyze ─┬─ something to pursue ──→ finalize → END
-             ↑                             ├─ analysis errored ─────→ finalize → END
-             └────────── replan ───────────┘   (at most once)
-```
-
-Compiled in `build_discovery_graph()`. `recursion_limit` is 10: one optional re-plan
-means at most seven node executions, so the limit can only be reached by a bug.
-
-Every node is wrapped by `_traced_node`, which opens a Langfuse span named
-`discovery.<node>` and attaches the budget before and after. That is why a trace shows
-model calls nested under the stage that made them rather than as a flat list.
+Main limits, in order:
+1. Link discovery was starved (since partly fixed by `rawHtml` links).
+2. Ranking passes fewer sites than there are seats.
+3. Budget goes unspent.
 
 ---
 
-### Node 1 — `plan_queries`
+## 7. Competitor watch (the "news" pipeline)
 
-**Reads** `as_of_date`, `supplied_queries`, `memory`.
-**Writes** `memory`, `planned_queries`. **Costs** one model call (`plan`).
+**File:** `discovery/competitor_watch.py`. It runs only when triggered (UI or `scripts/competitor_watch.py`).
 
-Three paths, in priority order:
+**Three search lanes**, all on Exa, limited to pages published since the last successful run minus
+2 days (the first run looks back 90 days):
+1. **Site lane:** one search per competitor, limited to that competitor's own domain.
+2. **Market lane:** about 8 searches written by the model, half with Exa's `news` category. Each
+   must name Retearn's product category or a buyer programme; general waste or recycling news does
+   not count.
+3. **Name lane:** a name check per competitor (column "Name check").
 
-1. **Caller supplied queries** — wrapped as `PlannedQuery` with
-   `intent="mixed"`, no model call. This also disables re-planning, because the caller
-   asked a specific question and a re-plan would silently change it.
-2. **Dry run** — three fallback queries from the profile, no network.
-3. **Normal** — one strict `json_schema` call returning exactly six queries.
+**Processing:**
+- Exact links seen before (`competitor_seen`) are skipped. Code compares only exact links and
+  dates.
+- The judge reads pages in batches of 20, with today's date and the last 30 days of signals. For
+  each page it decides:
+  - keep or drop
+  - who the page is about: a competitor from the list, `own group: …` (Recykal is never a
+    competitor), `new entrant: …`, `other company: …` or `market`
+  - **section**: Act on this (only while a deadline is ahead), Competitor moves, Market and
+    policy, New entrants and other companies, or Own group
+  - kind, date (read from the text), importance (anchored: high / medium / low), why it matters
+    and headline (in English)
+  - `same_story_as` (an earlier signal) and `duplicate_of` (a repeat within the batch)
+- **What code then does:**
+  - repeats are merged into the story page's `also_reported_by`
+  - low-importance pages are recorded as `context` (seen, not signals)
+  - everything else is stored in `competitor_signals`
 
-Before the call, `_memory()` assembles what the planner is allowed to know:
-`discovery_seed()` (five verbatim profile sections), `known_orgs()` (organising bodies
-already in the registry) and `due_soon(lookahead_months=2)` (programmes whose typical
-window is about to open). The planner is told what has already been found so it does
-not spend the run rediscovering it.
+**Digest:** `run_digest()` groups a run's signals by section, high importance first, plus
+"Following up" for earlier stories this run added coverage to. It uses the judge's own words, with
+no second model call. A model-written digest was tried and dropped (row 75).
 
-The prompt's governing rule is query length:
+**Proven runs:**
+- 617d7f: 11 on-market signals, including two biddable RVM tenders.
+- cb25a6: 38 signals in 5 sections, 297 s.
+- 5b67df: the current baseline.
+- A full run (11 competitors) takes about 30 searches and about 10 model calls.
 
-> **KEEP EACH QUERY SHORT — three or four content words.** A search engine returns only
-> pages matching every word you give it, so each extra word narrows the results.
-
-It also bans quotation marks, unexplained acronyms, product and hardware category
-names, and copying programme names out of the profile; and it directs variation across
-the field named, whether a year appears, the kind of recognition, the kind of body that
-runs it, and company stage. Four or five queries must name the primary market.
-
-**Geography and sector are read from `BusinessProfile.md`, never from code.** An
-earlier version hardcoded a region into the prompt and pointed an entire run at a
-market the business has no presence in.
-
-**On failure** `_fallback_queries()` builds one query per stated sector in the primary
-market. It **raises** rather than inventing geography if the profile yields nothing —
-a fallback that searches for the wrong company is worse than no fallback. The fallback
-is recorded as `outcome="fallback"` and surfaces in the UI as a red banner, because a
-silent fallback once cost a whole run.
-
----
-
-### Node 2 — `research`
-
-**Reads** `planned_queries`, `search_hits`, `evidence_bundles`, `memory`.
-**Writes** `search_hits`, `evidence_bundles`.
-**Costs** one search per query, one `shortlist` model call, one `select_links` model
-call per seed, and one scrape per page fetched.
-
-Four phases inside one node.
-
-**a. Search.** `tavily_search(query, max_results=7,
-search_depth="advanced", chunks_per_source=3)`, with social domains excluded.
-Tavily's chunked content is retained separately from the display snippet. Queries
-already seen this run are skipped, so a re-plan that repeats one costs nothing.
-
-Tavily's `country` parameter is deliberately **not** used: measured against live
-queries it never biased toward the named market, and combined with the market in the
-query text it returned zero results. Geography belongs in the query text, which works.
-
-**b. Ordering.** Hits are grouped by the query that found them and **round-robined**,
-so one productive query cannot crowd out the rest. URLs are canonicalised — lowercase
-host, `www.` stripped, tracking parameters removed, trailing slash normalised — and
-deduplicated. There is **no keyword scoring**: a regex tuned for award-marketing words
-scored "Sustainability Leadership Awards" at zero and dropped it from two runs.
-
-**c. Shortlist.** Up to `SHORTLIST_POOL = 80` hits are presented as a numbered list
-using up to 1,200 characters of Tavily evidence, the originating query and Tavily's
-score. The model returns **indices**, not URLs — an index cannot resolve to a page the
-model invented. It picks `MAX_RESEARCH_CANDIDATES = 4`.
-
-The prompt reduces the decision to one question:
-
-> **Does the organisation behind this page RUN the programme, or is it writing about
-> someone else's?**
-
-It states that a landing page is not worse than a deep one, since links are followed
-from whatever is picked, and that the organisation and programme should be judged
-rather than the domain name — newspapers, chambers of commerce and industry
-associations run a large share of all awards. If the call fails, the fallback is
-search-engine order: ranking is the fallback, never the gate.
-
-**d. Traversal.** For each pick, `resolve_evidence_bundle()` builds an `EvidenceBundle`
-under hard caps: `max_depth=2`, `max_pages=3`, `reserve_calls=3`.
-
-- Fetch the seed through Firecrawl (`formats=["markdown","links"]`,
-  `only_main_content=True`, 120s timeout, 200,000-character ceiling).
-- If the result is low quality — non-2xx, under 500 characters, or no identifiable
-  title — retry once with `only_main_content=False` and `wait_for=1500`, keeping
-  whichever is longer.
-- Collect same-site, non-binary links in page order. **No scoring** — only removal of
-  what cannot be fetched. PDFs are deliberately retained: award guidelines are often
-  PDFs and Firecrawl reads them.
-- **At depth 0 only**, one `select_links` call picks at most `MAX_LINKS_PER_PAGE = 2`
-  from up to 40 candidates. Firing it per page burned five calls where three sufficed.
-- If that call is unavailable or fails, **follow nothing**. The seed page alone beats a
-  keyword guess at which link matters.
-
-Each fetched page is recorded to the journey with its status code, depth, link count,
-page metadata and the **first 20,000 characters of its markdown** — the same bound
-extraction reads, so what the model saw is inspectable afterwards.
+**Open polish:**
+- Tender links point to listing sites, not the official notice.
+- Importance is not fully consistent.
+- A full run takes about 5–12 minutes because judge batches run one after another.
 
 ---
 
-### Node 3 — `analyze`
+## 8. Data inputs
 
-**Reads** `evidence_bundles`, `analyzed_seeds`, `memory`, `as_of_date`.
-**Writes** `candidates`, `analyzed_seeds`, `analysis_errors`, `replan_count`.
-**Costs** one model call per not-yet-analysed bundle.
+| File | Owner | Shape | Read by |
+|---|---|---|---|
+| `BusinessProfile.v2.md` | us + manager | Fixed `##` sections: Search constraints, Search angles, Identity, Business, Technology, Operations, Evidence, Recognition history, Known exclusions, Reading notes | Discovery (all prompts), competitor watch |
+| `ProductProfile.<M>.xlsx`, sheet **Parts** | engineering teams | **Exactly these columns:** Part ID, Subsystem (Embedded / Electrical / Mechanical), Item, What it does, Manufacturer, Part number, Qty per machine, Rate (₹, before GST), Vendor, Why chosen, Must Have (`;`-separated), GST %. **No other columns may be added** (the team rejected extras) | Component watch |
+| `Competitors.xlsx` | team | Competitor, Website, Watch (yes/no), Name check | Competitor watch |
+| `machines.json` | us | name + key per machine; a machine can be selected once its workbook exists | Component machine picker |
 
-Only bundles whose `seed_url` is absent from `analyzed_seeds` are processed, so a
-re-plan never pays twice for the same site.
-
-A bundle under `MIN_BUNDLE_CHARS = 400` is treated as a **failed fetch** — bot block,
-error page or redirect — and is not sent to the model at all. The failure is attributed
-to the scrape rather than to analysis, so the trace blames the stage that actually
-broke.
-
-Evidence is bounded at `ANALYSIS_PAGE_CHARS = 40_000` **per page, not per bundle**. A
-single positional slice across the whole bundle meant a long seed page consumed the
-entire window and the depth-1 pages the run had paid to fetch were never read.
-
-The model returns at most three candidates per bundle, each carrying `decision`
-(`pursue`/`skip`), `reason`, and three separate lists: `entry_eligibility`,
-`judging_criteria`, `application_requirements`. The prompt states that entry
-eligibility is the heart of the task — every stated condition as its own item, in the
-page's own words, never summarised into one line and never invented. It prefers the
-umbrella programme over one of its categories unless the category is entered
-independently, and skips past editions, closed windows, individual/student/researcher-only
-programmes, and grants.
-
-Candidates are deduplicated on `(target_title.casefold(), source_url)`, so one entity
-reached through several search hits is not extracted repeatedly.
-
-`replan_count` increments **only** when a pass produced neither a pursued candidate nor
-an error — that is, when the run genuinely found nothing and a different query plan
-might help.
+**ACE workbook status:**
+- 64 parts: 15 custom, 49 off the shelf. Total ₹2,40,596 per machine before GST.
+- Every line matches the Embedded ACE BOM.
+- Some values are **demo assumptions marked "(assumed)"**, approved by the user:
+  - the Jetson kit description and its Must Have (AI ≥0.5 TOPS, ≥4 GB, CSI-2, ≤15 W, GbE + USB 3.0,
+    production module)
+  - closest-fit model numbers for 9 parts that had none: Fan-4010-5V, TD1655, GS-11PC, GL-R series,
+    A9F54263, EZ9R35225, DHSA2NAN40320, Exide Star 850VA, EP42-12
+- **Open data items:** ACE-064 qty, ACE-025 wire unit, ACE-011 rate (₹550 vs a market price of about
+  ₹1,238).
 
 ---
 
-### Routing — `route_after_analyze`
+## 9. Component watch
 
-The graph's only branch:
+**File:** `discovery/component_watch.py`. It runs only when triggered (UI or `scripts/component_watch.py`).
 
-```python
-if any(item.decision == "pursue" for item in state["candidates"]):
-    return "finalize"          # something to extract — go do it
-if state.get("analysis_errors"):
-    return "finalize"          # errors are not fixed by new queries
-if (not state["supplied_queries"]
-        and state["replan_count"] <= 1
-        and runtime.budget.remaining > MIN_CALLS_AFTER_RESEARCH):
-    return "replan"            # nothing found, budget left, try a new plan
-return "finalize"
-```
+### 9.1 Flow
+1. **Load** the workbook. The loader stops with the column or row at fault, and a blank GST % is
+   refused. `Part.brief()` is the **only** text a prompt gets about a part: item, what it does, qty,
+   current model, vendor, Why chosen and Must Have. **Our rate never reaches the model.**
+2. **Plan** (one model call per 16 parts). For each part the model decides:
+   - `off_the_shelf`, with a reason (custom parts are never searched)
+   - `same_part_query`: one sentence describing an Indian seller's page for the exact current model
+   - `alternative_query`: one sentence describing a page for a newer or more capable replacement,
+     either the same maker's successor or another maker's equivalent. It names the current model as
+     what is being replaced and states the needs as minimums ("at least …"), never the current
+     model's exact figures.
 
-Four guards, each for a distinct reason: a re-plan is pointless when there is already
-something to extract; it cannot fix a provider error; it would override a caller who
-asked a specific question; and it must not consume the budget that finalisation needs
-to store what has already been paid for.
+   Both searches leave out certifications and the current vendor, and name no maker or model the
+   brief does not name.
+3. **Scope** (computed in code):
+   - `priority` (default): the off-the-shelf parts making up 80% of off-the-shelf cost per machine
+     (13 of 49 on ACE)
+   - `all`: every off-the-shelf part
+   - `--only`: the named parts
+4. **Search** (Exa, 5 results per search, up to 10 pages per part):
+   - highlights steered at price, pack size, GST, stock and specs
+   - page text capped at 3,000 characters (1,400 reach the judge)
+   - 4 parts run at a time, in an `asyncio.TaskGroup`, so a systemic failure cancels the rest
+   - **There is no ranking step.** Exa's top 5 for each search go straight to the judge.
+5. **Judge** (one call per part, 24k output tokens). Every page gets its own required slot
+   (`page_0 … page_N`, a schema built per call), so a reply that leaves a page out fails instead of
+   losing it silently. For each page the judge returns:
+   - **page and seller:** page kind (seller listing / manufacturer page / other); product, maker,
+     seller, seller kind (maker / authorised distributor, only when the page says so / other)
+   - **price** (read before any notes): the price as printed, GST basis (included / excluded / not
+     stated; MRP counts as included), currency and rupee flag, price unit and units per part (for
+     packs and lengths), price unclear, stock
+   - **fit:** relation (same part / alternative); effort (drop-in / minor changes / major changes /
+     needs verification); what would change; offers (newer model / better spec / more efficient)
+     with the reasons
+   - **checks and notes:** Must Have checks (met / not met / unclear); certifications the page
+     states (never inferred); discontinued; concerns
+6. **Drop** (in code, from the judge's labels):
+   - not kept: documentation, broker pages, comparison sites, category pages, wrong kind of product
+   - out of stock, discontinued, or priced in a currency other than rupees
 
----
+   These are never stored; the run trace lists each one with its reason.
+7. **Price maths** (code only, `price_difference`):
+   - **The seller's price is never changed.**
+   - When their price includes GST, **our** rate is grossed up: `rate × (1 + GST %)`. Otherwise
+     ours is compared before GST.
+   - The only conversion is × units per part.
+   - Outputs: per-unit difference %, per-machine theirs and ours, and saving per machine.
+8. **Decide per part** (`part_decision`, in code). The verdict is one of:
 
-### Node 4 — `finalize`
+   | Verdict |
+   |---|
+   | Cheaper seller found |
+   | Cheaper drop-in found |
+   | Changes needed to save |
+   | We pay the lowest found |
+   | No comparable price |
+   | Could not be judged |
+   | Nothing found |
+   | Low spend, not searched this run |
+   | Custom, not searched |
 
-**Reads** `candidates`, `evidence_bundles`, `as_of_date`, `rejected`.
-**Writes** `rejected`, `summary`. **Costs** one `extract` call per pursued candidate.
+   Rules that apply across sections:
+   - "Price unclear" findings are shown but never counted.
+   - "Needs verification" is never an alternative.
+   - Options whose page names no maker, or that fail a Must Have, are kept out of sections 2 and 3.
+   - Makers and authorised distributors are preferred in the top sections.
+9. **Present** — email, dashboard and CSV share one wording from `price_display`. Each starts with
+   three sections:
+   1. **Same part, cheaper seller**
+   2. **Better or newer** (drop-in, then minor changes, then major changes)
+   3. **Cheaper alternatives** (fits as is first, then needs adaptation)
 
-`skip` candidates go straight to `rejected` with the analyser's reason. For each
-`pursue` candidate, five steps run in order and any one of them can stop it.
+   Then "everything else found, by part". Certifications sit beside each listing. Tags are one or
+   two plain words.
+10. **Procurement check:** `PATCH /api/components/offers/{id}` records whether a finding held up
+    (holds / does not hold) when procurement asked the seller. This feedback loop is built; nobody
+    uses it yet.
 
-**a. `extract()`** — a plain function, not an agent. Strict `json_schema`, one retry
-that feeds the specific error back, then a **typed failure**: `insufficient_content`,
-`opportunity_closed`, or `malformed_response`. It is contractually guaranteed never to
-raise, because an exception escaping would take down the Discovery run around it.
+### 9.2 Runs, numbers and what was learned
 
-Input is `bundle.extraction_text(per_page_chars=20_000)`, ordered so the canonical page
-and its supporting URLs come first. Page title and meta description are passed as
-evidence — some sites render their name only as a logo image.
+| Run | Scope | Result |
+|---|---|---|
+| 15a5c8 (21 Oct) | full ACE | 364 findings; leads were small (~1% of the machine); vague parts got generous drop-in labels; unit mismatches gave false savings |
+| a4ec6b (23 Oct) | full ACE, 49 off the shelf, 67 searches, 53 calls | 4 same-part savings (₹764 per machine), 2 better or newer, 2 cheaper alternatives, 9 parts where we already pay the lowest. Accepted for the review; 38 of 531 pages had been silently skipped by the judge |
+| 345164 / 49fef4 / ddc28b (26 Oct) | 8-part tests | showed the judge skipping pages, then being cut off at 24k tokens, then fixed at 5 results per search |
+| 72fe64 (26 Oct) | full ACE, 46 off the shelf | 157 comparable prices (vs 122), 14 parts at lowest (vs 9), 0 pages lost; but 5 parts cut off, and Jetson's alternative search described the Nano itself |
 
-Two things the model does not get the final word on: `deadline_verified` (a string
-check) and `base_title` (a deterministic edition strip), because both feed the identity
-key and must not drift between models or years.
+**Running cost:** a full ACE run is about 67–69 Exa searches (about $1) and about 50 model calls,
+taking about 10 minutes.
 
-**b. `verify_deadline()`** — the day and month of the extracted deadline must appear
-**verbatim** in the source text, across five surface forms. The year may be inferred
-from page context without failing the check; stating a day and month without repeating
-an obvious year is normal. What this catches is the opposite case: a date the model
-invented that appears nowhere on the page.
+**What a scrutiny of the record shows:** about 30 rows of the change log (rows 78–105) were
+prompt or rule fixes, each tested by eye on one live run. Every fix moved the problem somewhere
+else. There is **no fixed, labelled reference set**, so nobody can say whether a change helped.
 
-**c. `assess_completeness()`** — five booleans and their mean. See §9 for its defects.
+### 9.3 Design rules for this pipeline (from the user; keep them)
+- Vendors are **discovered on the open web**. No vendor list limits the search or decides a label.
+  `SourcingSites.xlsx` is not used.
+- No string-matching, regex or grounding gates decide what is shown or dropped. The judge's labels
+  decide, and code does the comparison and the percentage.
+- Our rate stays local and never goes into a prompt.
+- The model never compares prices across pages; code does the price arithmetic.
+- Out of stock, discontinued and non-rupee listings never get past the judge.
+- No Firecrawl here.
+- The workbook keeps exactly the team's columns. When something more is needed, infer it from the
+  data and pages; don't add a column.
+- Decisions about what is shown, dropped or counted go to the user first.
 
-**d. `assess_actionability()`** — date arithmetic and HTTP status **only**:
+### 9.4 Course correction — gaps known so far
 
-| Condition | Verdict |
-| --- | --- |
-| Target page returned non-2xx | `reject` |
-| Submission deadline before today | `historical` |
-| Event date before today | `historical` |
-| `cycle_year` before this year | `historical` |
-| No date and no deadline note | `actionable`, with "no date found — verify on the source page" |
-| Otherwise | `actionable` |
+These are documented gaps between the build and its requirements. The review's own list should be
+added here.
 
-**Nothing here reads the page's wording.** Closure and openness are meaning, and the
-analyser and extractor — both of which read the whole page — already judge them. A
-keyword regex here was a third and worse opinion: "Nominate Now" and "Express Interest"
-failed it, so Greentech, CII and the ET Sustainability Awards were each discarded.
+1. **The wrong shape of search.** Engineers asked (F23) for a **deliberate, on-demand search for
+   one chosen component**. What was built sweeps every part of a machine on a schedule-like scope
+   (priority 80% / all).
+2. **Sources.** The W9 plan named **distributor APIs** (Octopart/Nexar, DigiKey, Mouser) for price
+   breaks, stock and lead time, which are structured, current and within terms of use. The build
+   instead reads open-web pages through Exa. Exa's top 5 are unranked and often not the best seller
+   pages, and stock and price are read from page snippets of at most 1,400 characters.
+3. **Missing data the plan asked for.** Datasheet specs as the source of Must Have checks, price
+   breaks and minimum order, lead time, single-source or import risk, annual volume, and
+   requalification effort. None of these are captured.
+4. **The input brief is thin.** Several parts lack Why chosen or Must Have, and 9 model numbers
+   and the Jetson spec are assumptions. The judge's effort labels are only as good as the brief.
+5. **No measurement.** There is no labelled set, no saved page text, and no replay. Each run is a
+   fresh, non-reproducible sample (Exa results drift between runs).
+6. **Judge capacity.** One reply per part, judging up to 10 pages, sits close to the 24k cap.
+   Parts get cut off (5 of 46 in 72fe64).
+7. **Value framing.** Savings found are small (about ₹300–800 on a ₹2.4 lakh machine). The parts
+   that cost the most (stepper, Keyence interlocks, light curtain, inverter, battery; about ₹60k)
+   gave no comparable price, because they are sold on quote or have no model number.
+8. **Only one machine.** ACE is the only machine with a workbook. The business profile's product
+   line (Reklaim PRO, ACE, Mini, Neo, FastScan) differs from `machines.json`.
 
-A `historical` verdict with a real deadline still calls `record_edition()`. A past
-edition is worthless as an opportunity but valuable to the registry, which needs
-edition history to compute `typical_window`.
-
-**e. `save_opportunity()`** — atomic upsert on the identity key. A genuinely new
-identity also records an edition against its programme. `record_warnings()` then
-produces per-record caveats — past edition, ungrounded deadline, `base_title` residue,
-no deadline at all — which are attached to the journey event *and* accumulated onto the
-run record.
-
----
-
-### Stage 5 — Eligibility, outside the graph
-
-**Runs after `run_discovery()` returns and does not consume the run budget.** Verified:
-`grep -rn "budget" src/opportunity_radar/eligibility/` returns nothing. The loop reads
-`{"source_url": {"$in": discovery.saved}}`, so it judges only what this run accepted,
-never stale records from earlier runs.
-
-Input is the stored `eligibility_criteria` list and the **full business profile** —
-unlike Discovery, which gets a distilled seed, because any profile field could decide
-any criterion. It does **not** receive the source page; see §12.
-
-Output is two buckets: `criteria_results` (`met` / `not_met` / `unclear`, each with
-reasoning) for conditions a fact settles, and `qualitative_notes` for conditions no
-fact can settle and for conditions belonging to a track this company would not enter.
-
-The prompt is explicit in both directions on alternative categories: judge only the
-track the company would realistically enter and name the others, but never move a
-genuine requirement into `qualitative_notes` to avoid saying `not_met`.
-
-`confidence` and `score` are computed by plain functions and never self-reported — a
-model asked to rate its own certainty rates its own certainty, not the evidence.
-
-This is the one model call in the system that uses `json_object` rather than strict
-`json_schema`.
-
----
-
-## 6. Model versus deterministic code
-
-The design rule throughout: **code does arithmetic and parses formats we own; the
-model does meaning.**
-
-
-| Decision                           | Made by   | Where                                    |
-| ---------------------------------- | --------- | ---------------------------------------- |
-| What to search for                 | **Model** | `plan_queries`                           |
-| Which results to fetch             | **Model** | `_shortlist`                             |
-| Which links to follow              | **Model** | `_link_chooser`                          |
-| What opportunities exist on a site | **Model** | `_analyze_bundle`                        |
-| Pursue or skip                     | **Model** | `_analyze_bundle`                        |
-| Whether a page is closed           | **Model** | `extract` (`status` field)               |
-| Record fields                      | **Model** | `extract`                                |
-| Whether a criterion is met         | **Model** | `evaluate`                               |
-| Result ordering                    | Code      | round-robin, search-engine order         |
-| URL canonicalisation               | Code      | `canonicalize_url`                       |
-| Which links are fetchable          | Code      | binary-suffix filter, same-site          |
-| Deadline grounding                 | Code      | `verify_deadline`                        |
-| `base_title` edition strip         | Code      | `strip_edition`                          |
-| Past/expired                       | Code      | `assess_actionability` — date arithmetic |
-| HTTP rejection                     | Code      | `assess_actionability`                   |
-| Identity + dedup                   | Code      | `identity.py` + unique index             |
-| `typical_window`                   | Code      | `compute_typical_window`                 |
-| Eligibility `confidence`/`score`   | Code      | `scoring.py`                             |
-| Budget enforcement                 | Code      | `RunBudget`                              |
-
-
-**Six prompts total.** Four live in `workflow.py` (plan, shortlist, select_links,
-analyze), one in `extract.py`, one in `evaluate.py`. All are Python string literals.
-There is no prompt registry, no versioning, and no A/B mechanism.
-
----
-
-
-
-## 7. Budget and cost control
-
-`RunBudget` (`discovery/budget.py`) is enforced in the tool wrapper — once spent,
-every tool refuses and the agent physically cannot act. A prompt asking the model to
-be frugal is not a budget.
-
-
-| Limit                | Default | Why it exists                                                                       |
-| -------------------- | ------- | ----------------------------------------------------------------------------------- |
-| `tool_calls`         | 40      | headline cost control                                                               |
-| `max_searches`       | 12      | stops one provider eating the run                                                   |
-| `max_scrapes`        | 14      | as above                                                                            |
-| `max_llm_calls`      | 16      | as above                                                                            |
-| `wall_clock_seconds` | 900     | the one a call-count budget cannot catch — a hung request never decrements anything |
-
-
-**Free tools:** `read_memory`, `save_opportunity`. Refusing a save would discard work
-already paid for; a run once extracted three records and lost the best one because the
-budget ran out on the save, one call after the expensive work was done.
-
-**⚠️ The UI budget slider only sets** `tool_calls`**.** `api/app.py:212` constructs
-`RunBudget(tool_calls=request.budget)` — every sub-cap keeps its default. So raising
-the slider to 80 still caps the run at **12 searches, 14 scrapes and 16 LLM calls**.
-`max_llm_calls = 16` is the real binding constraint on how much a run can do, and it
-is not adjustable from the UI.
-
-Per-call output-token budgets, sized from each call's own schema
-(`workflow.py:46-49`):
-
-```
-TOKENS_PICK_LINKS =  1_024   # ≤4 ints + one sentence
-TOKENS_SHORTLIST  =  3_000   # ≤8 picks, each an int + 300 chars
-TOKENS_PLAN       =  3_000   # 10 queries with rationales
-TOKENS_ANALYZE    = 16_000   # full condition lists; schema maxes near 10,400
-extract           =  4_096
-eligibility       =  4_096
-```
-
-One global ceiling meant a call returning four integers was allowed 16,000 tokens —
-when a model looped it generated 16,000 tokens of garbage and burned 300 seconds doing
-it. Three such calls cost one run 612 seconds.
-
-Selection calls (`shortlist`, `select_links`) pass
-`extra_body={"reasoning": {"effort": "low", "exclude": True}}`. Reasoning models spend
-the output budget on hidden reasoning before emitting anything; one run died with
-`reasoning_tokens=8453` against an 8,192 ceiling, having produced nothing.
-
-Timeouts: 90s with one retry on Discovery calls (the wall clock is only checked
-between calls, so 120s × 3 retries could sit for six minutes); 120s with three retries
-on extraction and eligibility.
-
-### Calls per run, observed
-
-Reference run (`qwen/qwen3-32b`, budget 50): **32 tool calls**, 4 saved.
-
-Typical composition: 1 plan + ~10 searches + 1 shortlist + ~4 select_links +
-~10 scrapes + ~4 analyze + ~4 extract, then eligibility (free) per saved record.
+Fixes already agreed for after the demo:
+- save page text per run
+- build a fixed, labelled reference set and score every change against it before it goes in
+- clean up tags ("drop-in" vs "fits as is"; how page kind is displayed)
 
 ---
 
+## 10. Storage — Mongo collections
 
+| Collection | Key / index | Holds |
+|---|---|---|
+| `opportunities` | unique: normalised organiser + base title + cycle year | opportunity records with eligibility or fit, record_state, evidence URLs, grounding, discovery_run_id (the last run that wrote it) |
+| `programs` | unique: organiser + base title | editions and typical window |
+| `runs` | run_id | every run of every pipeline (`budget.focus` = award/event/research/any/competitors/components), journey, counts, warnings, failures |
+| `run_progress`, `run_progress_writes` | LangGraph | discovery checkpoints, so a run can resume |
+| `extraction_failures` | source URL | typed extraction failures; cleared on a later success |
+| `dead_ends` | url (unique) | pages fetched that gave nothing; skipped after being seen empty twice |
+| `competitor_signals` | signal_id (unique), first_seen_at | signals with section, importance, also_reported_by |
+| `competitor_seen` | url (unique) | every judged page: kept / merged / context / dropped, with a reason |
+| `component_offers` | offer_id | one kept finding per page per part, with judge fields, price maths and procurement check |
 
-## 8. Observability
-
-Every LLM call goes through `chat_model()` and carries `trace_handler()`. An untraced
-call is a bug, not an optimisation — a `CLAUDE.md` constraint in force from Stage 0.
-
-`stage_span()` wraps each step in a named span with its decision attached — budget
-remaining, typed failure reason, whether the deadline grounded, the confidence
-verdict. LangChain's own spans are called `model`, `tools`, `ChatOpenAI` and
-`LangGraph`: correctly nested, but you cannot tell which call is which without opening
-every one.
-
-Two complementary records:
-
-- **Langfuse** — full prompts, responses, token counts, timings.
-- `runs` **collection** — decisions and outcomes at one row per tool call, written as
-the run proceeds. Each run carries its Langfuse trace URL so the UI can hand off
-rather than restate.
-
-`stage_span` carries a fixed bug worth remembering: a `@contextmanager` that yields
-again after catching a thrown-in exception raises `RuntimeError: generator didn't stop after throw()`, **masking every real error underneath it**. Only tracing setup is
-guarded now; the caller's body propagates unchanged (`tracing.py:60-79`).
+- Deleting a run also deletes its signals, seen pages and component findings.
+- Deleting a run never deletes opportunities, because a record may have been confirmed by later
+  runs.
+- "Clear database" wipes every collection and needs the JSON body `{confirm: "delete everything"}`.
+- Backup: `backups/radar-mongo-20261020.archive.gz` (gitignored).
 
 ---
 
+## 11. API and UI
 
+### 11.1 Endpoints (`api/app.py`)
 
-## 9. Scoring and confidence — complete inventory
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/health` | Mongo ping |
+| `GET /api/state` | overview: stored opportunities, programmes, run list |
+| `POST /api/pipeline` · `POST /api/runs` | discovery run; body `RunConfig` (model, 5 caps, reach limits, focus, provider, queries, dry_run) |
+| `POST /api/competitors/runs` | competitor run; 400 when the sheet is bad |
+| `POST /api/components/runs` | component run (product, scope, only); 400 when the workbook is bad |
+| `GET /api/components/machines` | the product line and which machines have a workbook |
+| `GET /api/runs/{id}` · `/events?after=N` · `/results` · `/signals` · `/components` | run detail, delta feed, opportunity results, competitor digest, component decisions (409 for runs stored before per-unit pricing) |
+| `PATCH /api/components/offers/{id}` | procurement's holds / does-not-hold check |
+| `GET /api/mail` · `GET/POST /api/runs/{id}/email` | recipients, email preview, send (SMTP_TO only) |
+| `POST /api/runs/{id}/stop` · `DELETE /api/runs/{id}` · `POST /api/database/clear` | stop, delete, wipe |
 
-**There is no confidence score at any search or selection stage.** This is the largest
-single gap in the system.
+**No authentication.** It is a local, single-user tool. Runs execute as FastAPI background tasks.
 
+### 11.2 Dashboard (React SPA)
+- **Sidebar:**
+  - "Looking for": Awards / Events / Research / Everything / Competitors / Components
+  - machine picker and "Parts to search" (Top 80% / All) for Components
+  - search provider, budget caps, reach limits
+  - the run list
+- **Run view** (`/run/<id>`): the journey is the pipeline's own steps, with each step's reasoning,
+  the raw event and the fetched page text.
+  - Opportunity runs: Results and Set aside tabs.
+  - Competitor runs: a Signals tab (cards by section).
+  - Component runs: How it ran (live per-part status), Decisions (the three sections) and Parts
+    (one row per BOM part, filterable, expanding to every finding).
+  - Every run: an Export panel (CSV, email preview, run log).
+- **Overview** (`/`): every stored opportunity and the programme registry.
 
-| Stage                                | Confidence mechanism                       |
-| ------------------------------------ | ------------------------------------------ |
-| Search result relevance              | **none** — Tavily's own score is discarded |
-| Which results to fetch               | **none** — a bare index + prose reason     |
-| Which links to follow                | **none** — bare indices + one sentence     |
-| Pursue/skip                          | **none** — a `Literal` + prose reason      |
-| Opportunity relevance to the profile | **does not exist**                         |
-
-
-Three numbers exist in the entire system:
-
-**1.** `extraction_completeness.score` — fraction of five booleans passed
-(`actionability.py:102-131`). Measures *how completely the form was filled*, not
-whether the opportunity is any good. Two defects:
-
-- `open_state` and `deadline` are the **same expression** — both
-`bool(record.submission_deadline or record.deadline_note)` (lines 109–110). So it is
-four real checks scored out of five, and having any deadline at all is worth 40% of
-the score.
-- The `source_coverage` regex `\b(eligib|who can apply|how to apply|nomination|application)\b`
-— the trailing `\b` can never follow `eligib`, so that branch **matches nothing**.
-Verified: `"Eligibility criteria"` → `False`, `"eligible companies"` → `False`. Only
-`nomination` / `application` / `who can apply` still function.
-
-This is also the number gating whether eligibility runs at all (`api/app.py:239`), so
-the dead branch has real consequences.
-
-**2. Eligibility** `score` — `met / (met + not_met)`, `unclear` excluded, `None` when
-the denominator is zero (`scoring.py:24-36`). Sound arithmetic, misleading on
-multi-track programmes (see §12). Deliberately **not displayed** in the UI.
-
-**3. Eligibility** `confidence` — `"high"` only when there is at least one
-fact-checkable criterion **and** none came back `unclear` (`scoring.py:39-56`). The
-second half matters as much as the first: a record made entirely of qualitative
-criteria has no `unclear` entries at all, and a rule that only looked for `unclear`
-would report high confidence on a verdict where nothing was ever verified. This one is
-correct.
-
-Also: `confidence_note` from extraction — one free-text sentence, not a number.
-
-`SearchHit.score: float = 0.0` (`state.py:28`) is **dead**. Nothing writes it, nothing
-reads it. A leftover from the deleted ranker.
+### 11.3 Email (`reporting.py`)
+- Every run mails a readable HTML body (inline styles, with a plain-text copy) and attaches the CSV.
+  - Opportunity runs: grouped by type.
+  - Competitor runs: grouped by digest section.
+  - Component runs: the three sections, then each part's top 5 findings with "N more".
+- All page text is HTML-escaped. Gmail clips messages over about 102 KB, which is why the
+  component email is trimmed.
 
 ---
 
+## 12. Future scope
 
+### 12.1 Component watch — course correction (first priority)
+1. **Capture the teams' requirements** in writing (§9.4) and agree on the target shape before
+   writing any code.
+2. **Likely target shape**, to confirm with the teams:
+   - an **on-demand search for one chosen component**, as engineers asked (F23), as well as or
+     instead of a whole-BOM sweep
+   - each must-have spec checked against the **datasheet**
+   - **distributor APIs** for price breaks, stock and lead time
+   - effort and requalification shown to a person, never decided in code
+3. **Measurement before tuning:**
+   - save the page text for each run
+   - build a labelled reference set (correct same part, correct effort, correct price and GST
+     basis, correct drop)
+   - a replay harness that re-judges saved pages and scores each change against the labels before
+     it ships
+4. **A component catalogue (W2):** component → alternatives → last price, stock and date checked,
+   so a part is re-checked rather than rediscovered every run.
+5. **Choosing what to search:** by annual spend (rate × qty × machines per year), then risk (single
+   source, lead time, import), then swappability. This needs data from the inventory team (W9 data
+   request).
+6. **Other machines' workbooks:** PRO, NEO, FastScan, Global RVM, Line. The source BOMs are already
+   in `docs/`.
+7. **Model capacity:** a stronger or larger-context model for the judge, or a reply split into more
+   than one call per part, instead of raising the output cap.
 
-## 10. Failure handling
+### 12.2 Competitor watch → newsletter
+- **Scheduled weekly runs** (no Exa Monitors: they need a public webhook and have no news or date
+  filter).
+- **Newsletter:** run the pipelines in parallel and send one email digest of new competitor
+  signals, new or closing opportunities, and component leads. It reuses `run_digest()`, the mailer
+  and `SMTP_TO`. This is the manager's "parallel newsletter" item.
+- Polish: link to official tender notices, make importance consistent, run judge batches in
+  parallel.
 
+### 12.3 Opportunity discovery (Phase 2 plan, AUDIT W1–W8)
+- **W1 measurement:** label the stored Exa results and candidates; replay ranking, extract and
+  evaluate offline; score each change in minutes. This was never started. It is the same gap as in
+  component watch.
+- **W2 cache and catalogue:** a search cache, a page cache, and a programme catalogue (names and
+  aliases, editions, next window). Two kinds of run: refresh what is known, and discover what is
+  not. It fixes "one programme under two titles" (item 31). The manager paused it on 14 Oct; the
+  design was liked.
+- **W3 search economy:** 10 results per search, directory pages become leads, type enforced as
+  data, a budget per type.
+- **W4 re-ranker test** (Qwen3-Reranker or Cohere) against the labels, adopted only if it beats the
+  current ranking.
+- **W5 confidence:** fit and certainty kept as separate tiers with reasons, never one number;
+  evaluation sees the source passage for each condition; code checks that every condition comes
+  back exactly once.
+- **W6 record shape per type**, partly done through type specs.
+- **W7** a rolling window (e.g. 6 months), scheduled runs, and an email digest of what is new,
+  changed or closing within 14 days.
+- **W8** a model per call type; one server-built CSV; delete `profile_seed.py`; rewrite `CLAUDE.md`.
 
-| Failure                  | Handling                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| Search throws            | logged to journey as `outcome="failed"`, run continues                                |
-| Firecrawl throws         | logged per URL, that page skipped, bundle continues                                   |
-| Page is thin/bot-blocked | bundle under 400 chars → `insufficient`, attributed to **scrape**, no model call paid |
-| Low-quality page         | one retry with full rendered page, keep the longer                                    |
-| Planning throws          | deterministic fallback plan + red UI banner                                           |
-| Shortlist throws         | falls back to search-engine order                                                     |
-| `select_links` throws    | follows nothing                                                                       |
-| Analyze throws           | that bundle errors, others continue                                                   |
-| Extraction unusable      | typed failure, recorded to `extraction_failures`                                      |
-| Eligibility unusable     | one retry, then raises; that record is skipped, loop continues                        |
-| Budget exhausted         | tools refuse with a `STOP:` message; saves still go through                           |
-| Operator stop            | `POST /api/runs/{id}/stop` → `budget.cancel()`                                        |
-
-
-**Run status** is derived in `agent.py:106-111`: `failed` if there were failures and
-nothing was saved; `completed_with_rejections` if anything was rejected or any failure
-occurred; otherwise `completed`.
-
----
-
-
-
-## 11. Regex inventory
-
-Two populations, judged as one by outside readers. The distinction matters.
-
-**Parsing formats we own — legitimate, not NLP.**
-
-
-| File                           | Count | Purpose                                                |
-| ------------------------------ | ----- | ------------------------------------------------------ |
-| `discovery/profile_seed.py`    | 4     | split markdown on `^##` , read `- Label: value` lines  |
-| `storage/identity.py`          | 3     | unaccent/lowercase/strip punctuation for the index key |
-| `discovery/link_resolver.py`   | 3     | extract `[text](url)`, canonicalise URLs               |
-| `extraction/extract.py`        | 1     | strip a code fence off a model reply                   |
-| `eligibility/evaluate.py`      | 2     | strip a fence; strip a leading list number             |
-| `eligibility/criteria_sets.py` | 3     | parse the hand-written golden-set markdown             |
-| `extraction/golden.py`         | 10    | parse the golden-set markdown                          |
-| `extraction/schema.py`         | 1     | ISO date shape check                                   |
-
-
-Replacing any of these with a model would be slower, costlier and non-deterministic on
-a task with exactly one correct answer.
-
-**Regex doing semantic work — the real debt.**
-
-
-| File                         | Count | Assessment                                                                                                                                                                                                                                                                                                         |
-| ---------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `extraction/base_title.py`   | 16    | **The main debt.** Strips years and edition markers by *shape* rather than wording, which is the better version of a bad idea — but it feeds the **identity key**, so a miss creates a duplicate record. `edition_residue()` surfaces anything edition-shaped that survives, as a warning rather than a rejection. |
-| `extraction/grounding.py`    | 5     | Defensible — an anti-hallucination string check with five surface forms. Brittle on unusual date formats.                                                                                                                                                                                                          |
-| `eligibility/scoring.py`     | 2     | `_FACTUAL_MARKERS = \b\d+\b                                                                                                                                                                                                                                                                                        |
-| `discovery/actionability.py` | 1     | The `source_coverage` check, with the dead `eligib` branch documented in §9.                                                                                                                                                                                                                                       |
-
-
-**Six judgment regexes were deleted during Phase 1** after they were measured doing
-harm: `rank_search_hit`, `score_link`, the
-`_POSITIVE`/`_NEGATIVE`/`_DIRECTORY`/`_SECONDARY_SOURCE` keyword sets,
-`has_open_signal`, `_CLOSED` phrase matching, `_year_conflict`, and
-`_COUNTRY_ALIASES`/`_GLOBAL_TERMS`.
-
----
-
-
-
-## 12. Known defects and debt
-
-Verified, with evidence. Ordered by impact.
-
-**Resolved since the first draft of this document**, listed so the history is not lost:
-
-- `confidence_note` was generated on every extraction and discarded. Now stored,
-  traced and displayed.
-- Run `warnings` and `failures` were computed and never persisted. Now written by
-  `finish_run()` and shown per run, with per-record caveats also attached to the
-  `save_opportunity` journey row.
-- `finish_run()` overwrote the `budget` field with counters only, dropping the caps, so
-  a finished run had nothing to meter against. Now writes `caps() | live()`.
-- Live budget counters were only written at start and finish. `append_event()` now
-  `$set`s them on every journey push.
-- Four of the five budget caps were accepted by the API and silently discarded.
-- Fetched page content was never retained, so a failed extraction could not be
-  diagnosed without re-running. The first 20,000 characters are now on the journey.
-- A page that failed to load appeared in the journey and nowhere else; unreachable
-  pages now surface in the run's set-aside list.
-
-**1. Extraction splits the same sentence inconsistently.** Two records from the same
-organiser, same boilerplate:
-
-```
-Industry Leaders Awards 2026 → 1 criterion:  "Open to entrepreneurs, startups,
-                                              MSMEs, companies, professionals…"
-India Innovation Awards 2026 → 7 fragments:  Entrepreneurs / Startups / MSMEs /
-                                              Companies / Professionals / …
-```
-
-Root cause is **not** model flakiness. `eligibility_criteria: [str]` is a flat list
-where every consumer reads entries as AND, so a disjunctive sentence has **no
-representable form** — the model must either fuse alternatives into one string or
-split them into requirements, and both are wrong. It is a forced lossy encoding.
-
-**2. The eligibility agent never sees the page it is judging.** It receives only the
-extracted strings. `"Entrepreneurs"` is unjudgeable alone; `"Open to entrepreneurs, startups, MSMEs, companies…"` is trivially met. Same page, same fact, context
-destroyed between the two calls. Eligibility is not budget-constrained, so passing the
-source text costs nothing.
-
-**3.** `entry_eligibility` **from** `analyze` **is computed and discarded.** `finalize_node`
-copies only `judging_criteria` and `application_requirements` onto the record
-(`workflow.py:996-1004`). The stored `eligibility_criteria` comes from `extract` — a
-second, independent read of the same evidence. Analyze saw 40,000 chars per page;
-extract saw 20,000. Two chances to split the sentence differently, one kept, for no
-benefit.
-
-**4. Extraction and eligibility run at provider-default temperature (~1.0).**
-`discovery_temperature()` applies to Discovery only, by design — but the stated intent
-was that extraction and eligibility be *reproducible*, and leaving them unset achieves
-the opposite. This compounds defect 1.
-
-**5. Alternative eligibility domains scored as joint requirements.** Documented in
-`CLAUDE.md`. IISD-CMI National Sustainability Awards lists 13 alternative categories;
-the business qualifies under one and scored 0.17, marked `not_met` on things like
-"minimum age above 70" belonging to categories it was never entering. Per-criterion
-reasoning is correct; only the aggregate misleads.
-
-**6.** `extraction_completeness.score` **is structurally broken** — duplicate check plus a
-dead regex branch. See §9. It is the number most likely to be quoted in a demo.
-
-**7. Eligibility uses** `json_object`**, not strict** `json_schema`**.** An off-vocabulary
-`status` would construct a `CriterionResult` that fails pydantic validation *outside*
-the retry loop, crashing that evaluation.
-
-**8. Nothing validates that the criterion list round-trips.** The prompt says every
-condition must appear exactly once across the two buckets. Nothing checks it. A
-dropped or reworded criterion is invisible.
-
-**9. No dedup across organiser name variants.** `CII` and `Confederation of Indian Industry` are two programmes. Accepted limit — an alias table trades a rare collision
-for curation overhead.
-
-**10. Vocabulary sprawl.** Three subsystems leak three vocabularies onto one screen:
-
-```
-actionability : actionable | upcoming | historical | reject
-journey       : ok | failed | fallback | insufficient | no_new_evidence | skipped | partial
-run status    : completed | completed_with_rejections | failed | running
-eligibility   : met | not_met | unclear | qualitative  → UI merges last two as "Your call"
-```
-
-`"upcoming"` is declared in the `ActionabilityVerdict` Literal but is **never
-returned** — the code path that produced it was removed. A run reported as
-`completed_with_rejections` reads as a qualified failure when it is a normal success.
-
-**11. "Considered but not taken forward" shows journey rows, not records.**
-`_skipped_pages()` (`api/app.py:141-181`) reconstructs skips by scanning every run's
-journey for scraped URLs that never reached extraction. The same site legitimately
-appears once per stage that touched it, across *all* runs — which reads as duplicated
-opportunities. **The dedup is very likely fine; the view is misleading.** The
-opportunity identity index makes true duplicates impossible. The one real dedup risk
-is `base_title` regex drift (§11).
-
-**12. Deleted evaluation harness.** `scripts/eval_retrieval.py`,
-`scripts/check_rerank.py` and `discovery/ranking.py` exist only as `.pyc` files. They
-were **never committed**. The data they produced survives — see §13 — but every tuning
-decision since has been made by eyeballing single runs.
-
-**13.** `OPENROUTER_RERANK_MODEL` **is configured and unused.** Declared in `.env.example`
-with a comment describing behaviour that no longer exists.
-
-**14. `/api/state` still returns every opportunity on every load.** Fine at the current
-scale, but it has no pagination and no run filter, so it grows without bound as runs
-accumulate. The per-run views do not use it.
+### 12.4 Platform
+- **Deployment:** containerise the app; hosting; authentication before any shared use; a scheduler.
+- **Provider abstraction**, if moving off OpenRouter (for example to Bedrock): today `chat_model()`
+  returns `ChatOpenAI` pointed at OpenRouter.
+- **Adapting for Recykal:** the profile and workbooks are already data; the prompts read
+  "this business" from the profile.
+- **Audit stage 3**, still open:
+  - fail loudly in 4 more places
+  - an eligibility count check
+  - a guard against formulas in the CSV
+  - refuse a duplicate run
 
 ---
 
+## 13. Rules that govern how this project is built (for Claude)
 
+These come from the user. Follow them in any future session.
 
-## 13. Evaluation assets
-
-**Already in the repo, currently unused by any code.**
-
-`retrieval_set/` — **207 hand-labelled search results**:
-
-
-| Field                              | Notes                                                              |
-| ---------------------------------- | ------------------------------------------------------------------ |
-| `label`                            | 2 = strongly relevant (46), 1 = partial (17), 0 = irrelevant (144) |
-| `query`, `title`, `url`, `snippet` | as returned                                                        |
-| `kind`                             | `planner` (111), `known` (65), `broad` (31)                        |
-| `tavily_rank`, `tavily_score`      | Tavily's own ordering and score                                    |
-| `notes`                            | hand-written justification                                         |
-
-
-`retrieval_set/pool.jsonl` — 207 raw pooled results.
-`retrieval_set/rerank_cache.json` — `cohere/rerank-4-fast` **scores for all 207**.
-
-This is enough to compute, offline and at zero API cost, whether re-ranking beats
-Tavily's ordering: precision@k, NDCG@k and MRR for both orderings. It has not been
-computed since the scripts were lost.
-
-`golden_set/extraction-examples.md` — Stage 0 reference data in two parts: extraction
-examples, and **5 hand-written eligibility criteria sets** spanning `met`, `not_met`,
-`not_met`-international, `unclear`, and one qualitative. Loaded by
-`eligibility/criteria_sets.py` and exposed at `GET /api/reference-sets`.
+1. **The user runs commands.** Hand over command blocks. Never run live runs that spend credits;
+   any spend needs an explicit yes. Never read `.env`.
+2. **Propose before implementing.** State the plan (exact file, before and after text, which runs
+   it affects), wait for agreement, then write the code. Say when a check is manual.
+3. **Root cause, not patches.** Diagnose why the mechanism is wrong and measure before claiming a
+   fix. The user's main criticism of component watch was cycles of patches with no measurement.
+4. **Fail loudly.** No fallbacks that degrade quietly.
+5. **No string-matching gates.** Never drop model output on URL, word or date string checks. The
+   model judges meaning; code does arithmetic and parses formats we own.
+6. **Searches describe the page wanted and never name things.** No venue, programme or vendor names
+   from model memory. Check every track a shared prompt change reaches.
+7. **Ask what is shown, dropped and counted.** Product decisions go to the user. Drop what nobody
+   can act on.
+8. **Verify library APIs** against the installed version before writing code.
+9. **Comments** are one or two lines, with no stories about past bugs, in code and in prompts.
+10. **Call the organisation Retearn.** Tags are one or two plain words.
+11. **Explain the flow first, then the details.** Present the simplest chunked flow first, then the
+    specifics of each step.
+12. **Budget:** free tiers. Replay before going live; one live run per milestone; log every spend in
+    `reference/spend-ledger.md`.
+13. **Model choice:** `qwen/qwen3-32b` and `deepseek/deepseek-v4.1-flash` work with strict JSON.
+    `google/gemma-4-31b-it` degenerates on `json_schema`.
 
 ---
 
+## 14. Timeline
 
-
-## 14. API surface
-
-
-| Endpoint              | Method | Purpose                                     |
-| --------------------- | ------ | ------------------------------------------- |
-| `/api/health`                | GET    | Mongo ping                                              |
-| `/api/state`                 | GET    | global metrics, all opportunities, programmes, run list |
-| `/api/pipeline`              | POST   | discovery **then** eligibility, one action              |
-| `/api/runs`                  | POST   | discovery only                                          |
-| `/api/runs/{id}`             | GET    | one run with its full journey                           |
-| `/api/runs/{id}/events`      | GET    | `?after=N` — run metadata plus only newer journey rows  |
-| `/api/runs/{id}/results`     | GET    | what that run saved, set aside and failed on            |
-| `/api/runs/{id}/stop`        | POST   | cancel in flight; saves still go through                |
-| `/api/runs/{id}`             | DELETE | remove one run record; stored opportunities are kept    |
-| `/api/eligibility`           | POST   | evaluate stored records lacking a verdict               |
-| `/api/reference-sets`        | GET    | the hand-written Stage 0 criteria sets                  |
-| `/api/database/clear`        | POST   | wipe all four collections (demo reset)                  |
-| `/{path}`                    | GET    | SPA fallback, so `/run/<id>` survives a refresh         |
-
-
-Runs execute as FastAPI `BackgroundTasks`; the journey is written to Mongo step by
-step and the page polls, rather than holding a connection open for the ~90s a run
-takes. `_ACTIVE: dict[str, RunBudget]` is an in-process registry, so **stop does not
-survive a server restart**.
-
-`POST /api/runs` is a deliberate, agreed deviation from Stage 5's "read-only" rule. It
-triggers work; it does not judge an opportunity or write to the business profile.
-
-### Run configuration
-
-Both run endpoints take the same `RunConfig` body. A blank `model` is coerced to
-`None`, meaning "use `OPENROUTER_MODEL`", so any OpenRouter model id can be typed in
-without a code change. All five budget caps are accepted and passed through
-`to_budget()`; an earlier version passed only `tool_calls`, which left
-`max_llm_calls=16` silently capping every run however high the headline budget was set.
-
-### Incremental polling
-
-`/api/runs/{id}/events?after=N` returns the run document minus its journey, plus a
-positional slice of the journey after `N`. The whole-document poll it replaced re-sent
-every search snippet every 1.5 seconds — about **6.2 MB over a 90-second run**, growing
-with journey length; the delta feed transfers about **0.15 MB**, and each row exactly
-once.
-
-Positional slicing is deliberate. `_record()` wraps its Mongo write in
-`try/except: pass`, so a dropped write leaves a gap in `seq` while positions stay
-contiguous — a `seq`-based cursor would stall or skip across such a gap. Simulated over
-40 poll cycles at a 5% write-failure rate, the positional cursor reconstructed the
-stored journey exactly, with no gaps and no duplicates.
-
-### Deleting a run
-
-`DELETE /api/runs/{id}` removes the run record and its journey. It refuses with 409
-while the run is in flight, and it deliberately **does not** touch `opportunities` or
-`programs`: a record is upserted on its own identity and may have been confirmed by
-later runs, so deleting a run must not delete findings that outlived it.
-
-### Export
-
-CSV generation is entirely client-side (`frontend/src/export.js`) — no endpoint, no
-server round trip. Three sheets: one row per opportunity, one row per eligibility
-condition, and one row per journey step. Quoting is RFC 4180, so commas, embedded
-quotes and newlines inside reasoning survive; a UTF-8 BOM is prepended so Excel opens
-non-ASCII correctly. Each sheet can be downloaded or copied to the clipboard.
-
----
-
-
-
-## 15. Frontend architecture
-
-A Vite + React single-page app, built to `frontend/dist` and served as static files by
-FastAPI. Client-side routing means `/run/<id>` is a real URL — bookmarkable, shareable,
-and survivable across a refresh thanks to the SPA fallback route.
-
-### Layout
-
-A two-column shell: a sticky configurator on the left, the active view on the right.
-The sidebar collapses to a 56-pixel rail that keeps the run button and a status dot per
-run; the state persists in `localStorage`, as do the model and budget settings.
-
-### Two views
-
-**Overview** (`/`) — everything stored across all runs, filterable by whether a date was
-confirmed, plus the recurring programme registry, which is written on every save and
-had never been displayed before.
-
-**Run view** (`/run/<id>`) — one run, with its status, the four budget meters, the stage
-strip, and three tabs: Journey, Opportunities, Set aside. Everything here is scoped to
-that run, derived from its own journey rather than from `discovery_run_id`.
-
-### The journey view
-
-The centre of the application, and the part that has to make an agentic pipeline
-legible to somebody who will not read a Langfuse trace.
-
-Steps group into **stage passes** by graph node. Each pass states its purpose and shows
-its step count, duration, and problem count; a re-plan appears as a second pass rather
-than silently interleaving. Each step card shows its **intent** — what it was trying to
-do, independent of the result — and then its **reasoning** in a bordered callout: why
-this query, why this result was chosen, why these links, why pursue, why skip. The
-model's stated reasoning is the visually dominant element on the card, and turns red on
-failure.
-
-Every step also carries a **Raw event** block containing the untouched JSON, so no
-recorded field is unreachable from the interface, and `scrape` steps carry the fetched
-page content itself.
-
-A closing **Final output** card reports what the run produced — each stored
-opportunity with its deadline and its met / not met / your-call tally — so a run ends
-with an answer rather than trailing off after the last step.
-
-While a run is live, new steps animate in, the active pass is highlighted, and a dashed
-"working…" row sits at the end. That row deliberately does not name a step: a step is
-recorded only once it completes, so what is executing at any instant is genuinely
-unknown, and naming one would be a guess presented as fact.
-
-### Vocabulary
-
-The UI deliberately narrows the system's internal vocabularies. `unclear` and
-`qualitative` both render as **"Your call"**, because to a reader they mean the same
-thing. Eligibility `score` is computed and stored but **not** shown as a headline
-number — it misleads on multi-track programmes — and appears only inside a diagnostics
-disclosure with an explanation of why the per-condition verdicts are the thing to read.
-
-This narrowing is presentation only. §12 item 10 records that the underlying vocabulary
-sprawl across actionability, journey outcomes, run status and eligibility is still
-unreconciled in the data.
-
----
-
-## 16. Decisions that shaped the implementation
-
-Each of these was a measured finding, not a preference.
-
-
-| Decision                                                     | Evidence                                                                                                                                |
-| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| No keyword scoring anywhere in selection                     | A ranker tuned for award-marketing words scored "Sustainability Leadership Awards" and RECEIC at 0.00, dropping them from multiple runs |
-| No Tavily `country` parameter                                | Measured: never biased toward the named market; combined with the market in the query text it returned zero results                     |
-| Short queries (3–4 content words)                            | Long queries returned the same small set of heavily-marketed pages every run                                                            |
-| Sector lines only from the profile                           | Feeding PET/HDPE to the planner produced queries no award is named after                                                                |
-| Per-call token budgets, not one ceiling                      | One global ceiling let a 4-integer call emit 16,000 tokens of garbage; three such calls cost 612 seconds                                |
-| `reasoning: {effort: low, exclude: true}` on selection calls | A run died at `reasoning_tokens=8453` against an 8,192 ceiling, having emitted nothing                                                  |
-| Schemas bounded so a maximal answer fits                     | `analyze`'s schema permitted ~41,000 tokens against a 16,000 cap; a legal reply truncated and became unparseable, losing two bundles    |
-| `select_links` only at depth 0                               | Per-page firing burned 5 calls where 3 sufficed                                                                                         |
-| Per-page truncation, not per-bundle                          | A long seed page consumed the whole window; L1 pages we paid for were never read                                                        |
-| No `upcoming` downgrade                                      | "Nominate Now" and "Express Interest" failed the regex, discarding ET, Greentech and CII while an award mill won on a parseable date    |
-| Missing date ≠ rejection                                     | ET Sustainability Awards — the best find of Phase 1 — has no parseable deadline on its landing page                                     |
-| Closure is the model's `status` alone                        | A keyword backstop read wording, not meaning, and outvoted a model that had read the whole page                                         |
-| Grounding dropped the "deadline language" proximity rule     | It caged a mechanical anti-hallucination check behind a keyword list; dates in tables failed despite being on the page                  |
-| Fallback plan raises rather than inventing geography         | A hardcoded fallback once spent a whole run on Bhutan, Mauritius and grants                                                             |
-| `qwen/qwen3-32b` as the working default                      | `google/gemma-4-31b-it` degenerates on strict `json_schema`; every gemma run that day failed or stalled                                 |
-
-
----
-
-
-
-## 17. Open questions for Phase 2
-
-Not proposals — the decisions that need making, with the facts that bear on them.
-
-1. **Confidence: telemetry or gate?** Every scoring heuristic deleted in Phase 1 was
-  deleted because it *gated*. A score that ranks and displays is safe; a score that
-   cuts needs the labelled set behind it first.
-2. **Does re-ranking actually help?** Should be measured before it is funded.
-3. **Should the criteria schema become two-level?** Program-wide conditions plus named
-  tracks where any one suffices. This is the root fix for defects 1 and 5, and it
-   changes stored data.
-4. **One model or per-node models?** Every call currently uses `OPENROUTER_MODEL`.
-  `chat_model()` already takes a per-call override, so this is one env var per role.
-5. **Should** `max_llm_calls` **be exposed?** It is the real binding constraint and is
-  currently invisible from the UI.
-6. **Typed opportunity kinds.** An award, a summit and a conference have different
-  relevant fields and share one schema, which is why records look half-empty.
-7. **Date policy.** Mandatory dates would have discarded the best find of Phase 1.
-  `programs.due_soon()` and `typical_window` already exist and are unused — urgency
-   ranking is a better answer than a search-time window filter.
-8. **Bedrock migration.** `chat_model()` returns `ChatOpenAI` against OpenRouter's base
-  URL. Moving to Bedrock means a provider abstraction, not just a new model id.
-
----
-
-*Verified against the working tree at the time of writing. Every file and line
-reference was checked; every measured claim comes from a live run or a direct test.*
+| Date | Milestone |
+|---|---|
+| Sep 2026 | Stages 0–6: storage, extraction, eligibility, discovery graph, UI (commits 51b0f20 → 97b093c) |
+| 21–28 Sep | Phase 1 audit (AUDIT Groups A–E); graph split into 7 nodes with per-site fan-out; Exa replaces Tavily; email export |
+| 28 Sep | **Phase 1 presented** |
+| 5–16 Oct | Phase 2: type specs, ReAct search, Research track (two tracks, fit table), Events conditions, Everything as three tracks; stored-programme lines removed from prompts after an A/B test |
+| 14–15 Oct | Manager: catalogue paused; priorities set as (1) the main tracks reliable, (2) competitor and component watch, (3) parallel newsletter plan |
+| 19 Oct | Presentation |
+| 20–21 Oct | Competitor watch built, live-tested and put in the UI; disk recovery; Langfuse made on-demand |
+| 21–26 Oct | Component watch on ACE: about 10 live runs, rows 78–105 |
+| 26 Oct | Demo freeze |
+| 27 Oct | **Phase 2 review:** the news pipeline is safe; component watch needs course correction |

@@ -33,3 +33,8 @@ each provider's dashboard.
 | 2026-10-23 | Run 44e7d3 — Component watch, 5-part test (ACE-006/008/010/011/013) after the page-rule and section changes; ACE-008 cut off at the output limit | 10 (highlights + text) | 0 | 6 model calls | — | check dashboard |
 | 2026-10-23 | Run 68bd27 — Component watch, 3-part re-test (ACE-006/008/011) after the minor-changes, dropped-page and sheet fixes; no cut-offs | 6 (highlights + text) | 0 | 4 model calls | — | check dashboard |
 | 2026-10-23 | Run a4ec6b — Component watch, full ACE (All parts, 49 off-the-shelf) after the page-rule, section, GST and sheet changes | 67 (highlights + text) | 0 | 53 model calls | — | check dashboard |
+| 2026-10-26 | Run 8f5573 — Component watch, 8-part test (ACE-001/007/011/014/016/028/036/037) after makers, certifications, section-2 and assumed-model changes | 16 (highlights + text) | 0 | 9 model calls | — | check dashboard |
+| 2026-10-26 | Run 345164 — Component watch, 8-part test after GST-basis, drop rules and tag changes; judge answered only 1 of 16 pages for ACE-028 and ACE-036 | 16 (highlights + text) | 0 | 9 model calls | — | check dashboard |
+| 2026-10-26 | Run 49fef4 — Component watch, 8-part test with one required slot per page; 6 of 8 judge replies cut off at the 24,000-token limit | 16 (highlights + text) | 0 | 9 model calls (6 cut off) | — | check dashboard |
+| 2026-10-26 | Run ddc28b — Component watch, 8-part test at 5 results per search; every page answered, no cut-offs | 16 (highlights + text) | 0 | 9 model calls | — | check dashboard |
+| 2026-10-26 | Run 72fe64 — Component watch, full ACE (All parts, 46 off-the-shelf) after all fixes; 5 parts cut off at the 24,000-token limit | 69 (highlights + text) | 0 | 50 model calls | — | check dashboard |

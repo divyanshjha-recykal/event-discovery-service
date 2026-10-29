@@ -22,6 +22,7 @@ from email.message import EmailMessage
 from html import escape
 
 from .config import MissingConfig
+from .discovery.component_watch import price_display
 
 COLUMNS = [
     "Title", "Organising body", "Domain", "Category", "Year",
@@ -211,10 +212,11 @@ def signals_email(sections: list[dict], run: dict) -> dict:
 
 
 COMPONENT_COLUMNS = ["Part ID", "Item", "Qty per machine", "Our rate per unit (₹, before GST)", "Relation",
-                     "Effort", "What would change", "Product", "Seller", "Listed price", "Currency", "Listed per",
-                     "GST", "Price before GST", "Units per our unit", "Price per our unit (₹)", "Compared on",
-                     "Difference vs our rate (%)", "Per machine, theirs (₹)", "Per machine, ours (₹)",
-                     "Saving per machine (₹)", "In stock", "Offers", "Why", "Must-have checks", "Concerns", "Link"]
+                     "Effort", "What would change", "Product", "Maker", "Seller", "Listed price", "Currency", "Listed per",
+                     "GST", "Units per our unit", "Their price per our unit (₹, as listed)", "GST basis",
+                     "Our price on that basis (₹)", "Difference vs ours (%)", "Per machine, theirs (₹)", "Per machine, ours (₹)",
+                     "Saving per machine (₹)", "In stock", "Offers", "Why", "Must-have checks", "Certifications stated",
+                     "Price unclear", "Concerns", "Link"]
 EMAIL_FINDINGS_PER_PART = 5
 
 _TABLE = '<table style="border-collapse:collapse;width:100%;font-size:12px;margin:0 0 6px">'
@@ -228,27 +230,20 @@ def _rs(n: float) -> str:
 
 
 def listed_price(o: dict) -> str:
-    """The price exactly as the seller lists it, with what it buys and its GST basis."""
-    if o["price"] is None:
-        return "no price shown"
-    # A before-GST figure below the listed price means the listed price includes GST, whatever the label says.
-    gst = "included" if o["price_before_gst"] is not None and o["price_before_gst"] < o["price"] else o["gst"]
-    text = f"{o['currency']} {o['price']:,.0f} per {o['price_unit'] or 'unit not stated'} (GST {gst})"
-    if o["price_before_gst"] is not None and o["price_before_gst"] != o["price"]:
-        text += f"; {o['price_before_gst']:,.0f} before GST"
-    return text
+    """The price as the seller lists it, with its GST basis."""
+    return price_display(o)["listed"]
 
 
 def compared_price(o: dict) -> str:
-    """The seller's price per our unit against our rate, or why it was not compared."""
-    if o["unit_price"] is None:
-        if o["price"] is None:
-            return "—"
-        return "not compared: " + ("not a rupee price" if o["currency"].strip().upper() not in ("INR", "₹", "RS", "RS.")
-                                   else f"listed per {o['price_unit'] or 'an unstated unit'}, not clearly one of our units")
-    basis = ("" if o["compared_on"] == "before GST" else f", {o['compared_on']}" if o["compared_on"].startswith("before GST")
-             else f", on their price with GST {o['gst']}")
-    return f"{_rs(o['unit_price'])} per unit · {o['diff_pct']:+.0f}% vs ours {_rs(o['rate'])}{basis}"
+    """The seller's price against ours on the same GST basis, or why it was not compared."""
+    d = price_display(o)
+    return " · ".join(x for x in (d["each"], d["versus"], d["doubt"]) if x)
+
+
+def _versus(o: dict) -> str:
+    d = price_display(o)
+    return (_e(d["versus"]) + (f'<br><span style="color:#59636e">{_e(d["each"])}</span>' if d["each"] else "")
+            + (f'<br><span style="color:#cf222e">{_e(d["doubt"])}</span>' if d["doubt"] else ""))
 
 
 def per_machine(o: dict) -> str:
@@ -272,18 +267,22 @@ def components_email(digest: dict, run: dict) -> dict:
     filename = f"component-watch-{product.lower()}-{run['run_id'][:6]}.csv"
     count = sum(len(p["offers"]) for p in digest["parts"])
     title = f"Component watch · {product} · {date.today():%d %b %Y}"
-    sub = ("Prices are compared per unit as our BOM counts it, before GST: the seller's own before-GST price, or their "
-           "GST-included price less our GST rate for the part.")
-    head = ["Type", "Product · seller", "Listed price", "Per unit vs ours", "Per machine", "Notes"]
+    sub = ("Seller prices are shown exactly as listed. Each is compared with ours on the same basis: with our GST added "
+           "when their price includes GST, before GST when it excludes GST or does not say. Price unclear: shown, never "
+           "counted. Needs verification: the pages lack the facts to tell whether it fits; not an alternative.")
+    head = ["Type", "Product · maker · seller", "As listed", "vs ours", "Notes"]
     html = [_WRAP, _H1.format(_e(title)), _SUB.format(_e(sub))]
     text = [title, sub, ""]
     def ours(r):
-        text = f"{_rs(r['rate'] or 0)} × {r['qty'] or 1:g} = {_rs(r['line_cost'])}"
-        return text + (f" ({_rs(r['line_cost'] * (1 + r['gst']))} with {r['gst']:.0%} GST)" if r.get("gst") else "")
+        text = f"{_rs(r['rate'] or 0)} each + GST" + (f" ({_rs((r['rate'] or 0) * (1 + r['gst']))} incl. {r['gst']:.0%} GST)"
+                                                      if r.get("gst") else "")
+        return text + (f"; × {r['qty']:g} = {_rs(r['line_cost'])} + GST" if (r["qty"] or 1) != 1 else "")
 
     def link(o):
+        d = price_display(o)
         return (f'<a href="{_e(o["url"])}" style="color:#0969da;text-decoration:none">{_e(o["product"] or o["title"])}</a>'
-                f'<br><span style="color:#59636e">{_e(o["seller"])}</span>')
+                f'<br><span style="color:#59636e">{_e(" · ".join(x for x in (o.get("maker"), d["seller"]) if x))}</span>'
+                + (f'<br><span style="font-size:11px;color:#1a7f37">{_e(d["certifications"])}</span>' if d["certifications"] else ""))
 
     def section(label, rows, head, cells, line, empty):
         html.append(_H2.format(_e(label)))
@@ -298,27 +297,28 @@ def components_email(digest: dict, run: dict) -> dict:
             text.extend([line(r), ""])
         html.append("</table>")
 
-    part = lambda r: _e(f"{r['part_id']} · {r['item']}")
+    part = lambda r: _e(f"{r['part_id']} · {r['item']}") + (
+        f'<br><span style="color:#59636e">{_e(r["part_number"])}</span>' if r.get("part_number") else "")
     section("1. Same part, cheaper seller", digest["same_part"],
-            ("Part", "Ours, before GST", "Seller", "Listed price", "Per unit vs ours", "Saving per machine"),
-            lambda r: [part(r), _e(ours(r)), link(r["best_same"]), _e(listed_price(r["best_same"])),
-                       _e(compared_price(r["best_same"])), _e(_rs(r["best_same"]["saving_per_machine"]))],
+            ("Part", "Ours", "Seller", "As listed", "vs ours", "Saving per machine"),
+            lambda r: [part(r), _e(ours(r)), link(r["best_same"]), _e(listed_price(r["best_same"])), _versus(r["best_same"]),
+                       _e(price_display(r["best_same"])["saving"])],
             lambda r: (f"* {r['part_id']} {r['item']}: {r['best_same']['seller']}, {compared_price(r['best_same'])}, "
                        f"saves {_rs(r['best_same']['saving_per_machine'])} per machine {r['best_same']['url']}"),
             "No other seller has the same part for less in this run.")
-    section("2. Better or newer, fits", digest["upgrades"],
-            ("Part", "Option · seller", "What is better", "Fit", "Per unit vs ours"),
+    section("2. Better or newer (fits as is first, then minor, then major changes)", digest["upgrades"],
+            ("Part", "Option · maker · seller", "What is better", "Fit", "As listed", "vs ours"),
             lambda r: [part(r), link(r["best_upgrade"]),
                        _e(_short(f"{', '.join(r['best_upgrade']['offers'])}: {r['best_upgrade']['why']}", 240)),
                        _e(r["best_upgrade"]["effort"] + (f": {r['best_upgrade']['changes']}" if r["best_upgrade"]["changes"] else "")),
-                       _e(compared_price(r["best_upgrade"]))],
+                       _e(listed_price(r["best_upgrade"])), _versus(r["best_upgrade"])],
             lambda r: (f"* {r['part_id']} {r['item']}: {r['best_upgrade']['product']} at {r['best_upgrade']['seller']} "
                        f"({r['best_upgrade']['effort']}): {', '.join(r['best_upgrade']['offers'])} {r['best_upgrade']['url']}"),
             "No better or newer option was shown to fit. Must Have specs in the workbook let the judge confirm fit.")
     section("3. Cheaper alternatives (fits as is first, then needs adaptation)", digest["alternatives"],
-            ("Part", "Ours, before GST", "Option · seller", "Per unit vs ours", "Saving per machine", "What would change"),
-            lambda r: [part(r), _e(ours(r)), link(r["best_alternative"]), _e(compared_price(r["best_alternative"])),
-                       _e(_rs(r["best_alternative"]["saving_per_machine"])),
+            ("Part", "Ours", "Option · maker · seller", "As listed", "vs ours", "Saving per machine", "What would change"),
+            lambda r: [part(r), _e(ours(r)), link(r["best_alternative"]), _e(listed_price(r["best_alternative"])),
+                       _versus(r["best_alternative"]), _e(price_display(r["best_alternative"])["saving"]),
                        _e("fits as is" if r["best_alternative"]["effort"] == "drop-in"
                           else f"{r['best_alternative']['effort']}: {r['best_alternative']['changes']}")],
             lambda r: (f"* {r['part_id']} {r['item']}: {r['best_alternative']['product']} at {r['best_alternative']['seller']}, "
@@ -338,9 +338,7 @@ def components_email(digest: dict, run: dict) -> dict:
             kind = "same part" if o["relation"] == "same part" else o["effort"]
             notes = " ".join(x for x in (f"Would change: {o['changes']}." if o["changes"] else "",
                                          f"Concerns: {o['concerns']}" if o["concerns"] else "") if x)
-            cells = [_e(kind), f'<a href="{_e(o["url"])}" style="color:#0969da;text-decoration:none">'
-                                f'{_e(o["product"] or o["title"])}</a><br><span style="color:#59636e">{_e(o["seller"])}</span>',
-                     _e(listed_price(o)), _e(compared_price(o)), _e(per_machine(o)), _e(_short(notes))]
+            cells = [_e(kind), link(o), _e(listed_price(o)), _versus(o), _e(_short(notes))]
             html.append("<tr>" + "".join(_TD.format(c) for c in cells) + "</tr>")
             text += [f"* [{kind}] {o['product']} · {o['seller']}", f"  {listed_price(o)}",
                      f"  {compared_price(o)} · per machine: {per_machine(o)}", f"  {o['url']}", ""]
@@ -363,12 +361,14 @@ def components_email(digest: dict, run: dict) -> dict:
     for part in digest["parts"]:
         for o in part["offers"]:
             writer.writerow([part["part_id"], part["item"], blank(part["qty"]), blank(part["rate"]),
-                             o["relation"], o["effort"], o["changes"], o["product"], o["seller"], blank(o["price"]),
-                             o["currency"], o["price_unit"], o["gst"], blank(o["price_before_gst"]),
-                             blank(o["units_per_part"]), blank(o["unit_price"]), blank(o["compared_on"]),
+                             o["relation"], o["effort"], o["changes"], o["product"], o.get("maker", ""), o["seller"],
+                             blank(o["price"]),
+                             o["currency"], o["price_unit"], o["gst"],
+                             blank(o["units_per_part"]), blank(o["unit_price"]), blank(o["compared_on"]), blank(o.get("ours_unit")),
                              blank(o["diff_pct"]), blank(o["machine_theirs"]), blank(o["machine_ours"]),
                              blank(o["saving_per_machine"]), o["in_stock"], _join(o["offers"]), o["why"],
-                             _join(f"{c['requirement']}: {c['status']}" for c in o["checks"]), o["concerns"], o["url"]])
+                             _join(f"{c['requirement']}: {c['status']}" for c in o["checks"]),
+                             _join(o.get("certifications") or []), "yes" if o.get("price_unclear") else "", o["concerns"], o["url"]])
     return {"subject": title, "text": "\n".join(text), "html": "".join(html),
             "csv": buffer.getvalue().encode("utf-8-sig"), "filename": filename, "count": count}
 

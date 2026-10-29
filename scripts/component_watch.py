@@ -48,7 +48,7 @@ async def main() -> int:
         print(f"\n{label} ({len(rows)})")
         for r in rows:
             o = r[key]
-            print(f"  {r['part_id']} {r['item'][:40]} · {o['product'][:40]} at {o['seller']} · {o['effort']}"
+            print(f"  {r['part_id']} {r['item'][:40]} · {(o['product'] or o['title'])[:40]} at {o['display']['seller']} · {o['effort']}"
                   + (f" · saves ₹{o['saving_per_machine']:,.0f} per machine" if (o['saving_per_machine'] or 0) > 0 else "")
                   + f" · {o['url']}")
     for part in digest["parts"]:
@@ -57,7 +57,7 @@ async def main() -> int:
         print(f"\n## {part['part_id']} {part['item']}  (ours: {rate})\n  >> {part['summary']}")
         for o in part["offers"]:
             label = "same part" if o["relation"] == "same part" else o["effort"]
-            print(f"  [{label}] {o['product']} · {o['seller']} · {offer_price(o)}"
+            print(f"  [{label}] {o['product'] or o['title']} · {o['display']['seller']} · {offer_price(o)}"
                   + (f" · {', '.join(o['offers'])}" if o["offers"] else "")
                   + (f"\n    {o['why']}" if o["why"] else "")
                   + (f"\n    would change: {o['changes']}" if o["changes"] else "")

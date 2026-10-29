@@ -1,6 +1,6 @@
 # Opportunity Radar
 
-Discovers awards, grants and events relevant to Recykal, evaluates eligibility
+Discovers awards, grants and events relevant to Retearn, evaluates eligibility
 against the business profile, and stores the result. Decision support only —
 nothing here submits an application or contacts an award body.
 

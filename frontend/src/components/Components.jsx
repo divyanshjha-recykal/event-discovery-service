@@ -3,7 +3,6 @@ import { api } from '../api.js'
 
 const rupees = (n) => `₹${Math.round(n).toLocaleString('en-IN')}`
 const pct = (n) => `${n > 0 ? '+' : ''}${Math.round(n)}%`
-const RUPEE = new Set(['INR', '₹', 'RS', 'RS.'])
 
 // How each verdict reads at a glance.
 const VERDICT_TAG = {
@@ -29,35 +28,29 @@ function useRun(runId, live, tick) {
   return [data, error, () => setEpoch((n) => n + 1)]
 }
 
-/** The price exactly as the seller lists it. */
+/** The price as the seller lists it, with its GST basis: the same words the email uses. */
 function Listed({ o }) {
-  if (o.price == null) return <span className="muted">no price shown</span>
+  return <span className={o.price == null ? 'muted' : ''}>{o.display.listed}</span>
+}
+
+/** The seller's price against ours on the same GST basis, or why it was not compared: the email's words. */
+function Versus({ o }) {
   return (
     <>
-      {o.currency} {o.price.toLocaleString('en-IN')} per {o.price_unit || 'unit not stated'}
-      <div className="muted">GST {o.price_before_gst != null && o.price_before_gst < o.price ? 'included' : o.gst}</div>
-      {o.price_before_gst != null && o.price_before_gst !== o.price && (
-        <div className="muted">{o.price_before_gst.toLocaleString('en-IN')} before GST</div>
-      )}
+      <span className={o.diff_pct == null ? 'muted' : o.diff_pct < 0 ? 'ok-text' : ''}>{o.display.versus || '—'}</span>
+      {o.display.each && <div className="muted">{o.display.each}</div>}
+      {o.display.doubt && <div className="err">{o.display.doubt}</div>}
     </>
   )
 }
 
-/** The seller's price per unit (as our BOM counts it) against our rate, or why it was not compared. */
-function Compared({ o }) {
-  if (o.unit_price == null) {
-    if (o.price == null) return <span className="muted">—</span>
-    return (
-      <span className="muted">
-        not compared: {RUPEE.has(o.currency.trim().toUpperCase()) ? `listed per ${o.price_unit || 'an unstated unit'}, not clearly one of our units` : 'not a rupee price'}
-      </span>
-    )
-  }
+/** Our rate before GST and with our GST, each, and for the qty per machine. */
+function Ours({ r }) {
   return (
     <>
-      {rupees(o.unit_price)} per unit
-      <div className={o.diff_pct < 0 ? 'ok-text' : 'muted'}>{pct(o.diff_pct)} vs ours {rupees(o.rate)}</div>
-      {o.compared_on !== 'before GST' && <div className="muted">{o.compared_on?.startsWith('before GST') ? o.compared_on : `on their price, GST ${o.gst}`}</div>}
+      {rupees(r.rate)} each + GST
+      {r.gst != null && <div className="muted">{rupees(r.rate * (1 + r.gst))} incl. {Math.round(r.gst * 100)}% GST</div>}
+      {(r.qty ?? 1) !== 1 && <div className="muted">× {r.qty} = {rupees(r.line_cost)} + GST</div>}
     </>
   )
 }
@@ -70,8 +63,9 @@ function Option({ o }) {
   return (
     <>
       <a className="u" href={o.url} target="_blank" rel="noreferrer">{o.product || o.title}</a>
-      <div className="small">{o.seller} <span className="muted">· {o.page_kind || 'page'} · stock: {o.in_stock}</span>
-        {o.discontinued && <span className="tag bad" style={{ marginLeft: 6 }}>discontinued</span>}</div>
+      <div className="small">{o.maker && <span className="muted">by {o.maker} · </span>}{o.display.seller} <span className="muted">· {o.page_kind || 'page'}</span>
+</div>
+      {o.display.certifications && <div className="small ok-text">{o.display.certifications}</div>}
     </>
   )
 }
@@ -103,18 +97,14 @@ function Check({ o, onSaved }) {
 function Findings({ offers }) {
   return (
     <table className="grid">
-      <thead><tr><th style={{ width: 95 }}>Type</th><th style={{ width: '20%' }}>Product · seller</th><th style={{ width: 130 }}>Listed price</th><th style={{ width: 140 }}>Per unit vs ours</th><th style={{ width: 120 }}>Per machine</th><th>Why, what would change, concerns</th></tr></thead>
+      <thead><tr><th style={{ width: 95 }}>Type</th><th style={{ width: '20%' }}>Product · maker · seller</th><th style={{ width: 150 }}>As listed</th><th style={{ width: 190 }}>vs ours</th><th>Why, what would change, concerns</th></tr></thead>
       <tbody>
         {offers.map((o) => (
           <tr key={o.offer_id}>
             <td className="small"><Effort o={o} /></td>
             <td><Option o={o} />{!!o.offers.length && <div className="small muted">{o.offers.join(', ')}</div>}</td>
             <td className="small"><Listed o={o} /></td>
-            <td className="small"><Compared o={o} /></td>
-            <td className="small">
-              {o.machine_theirs == null ? <span className="muted">—</span>
-                : <>{rupees(o.machine_theirs)}<div className="muted">ours {rupees(o.machine_ours)} for {o.qty ?? 1}</div></>}
-            </td>
+            <td className="small"><Versus o={o} /></td>
             <td className="small">
               {o.why && <div>{o.why}</div>}
               {o.changes && <div><span className="muted">Would change:</span> {o.changes}</div>}
@@ -146,7 +136,7 @@ function Decisions({ data, refresh, live }) {
     <>
       {live && <p className="small warn-line">Run in progress: these numbers fill in as each part is judged.</p>}
       <div className="kpis">
-        <Kpi value={data.same_part.length} label={`parts with the same part cheaper elsewhere (${rupees(data.same_part.reduce((n, r) => n + r.best_same.saving_per_machine, 0))} per machine)`} />
+        <Kpi value={data.same_part.length} label="parts with the same part cheaper elsewhere" />
         <Kpi value={data.upgrades.length} label="parts with a better or newer option that fits" />
         <Kpi value={data.alternatives.length} label={`parts with a cheaper alternative (${data.alternatives.filter((r) => r.best_alternative.effort === 'drop-in').length} fit as is)`} />
         <Kpi value={v['We pay the lowest found']} label="parts where we already pay the lowest found" />
@@ -158,16 +148,16 @@ function Decisions({ data, refresh, live }) {
       <div className="section-label">1. Same part, cheaper seller ({data.same_part.length})</div>
       {data.same_part.length ? (
         <table className="grid">
-          <thead><tr><th style={{ width: '20%' }}>Part</th><th style={{ width: 100 }}>Ours, before GST</th><th>Seller</th><th style={{ width: 150 }}>Listed price</th><th style={{ width: 150 }}>Per unit vs ours</th><th style={{ width: 100 }}>Saving per machine</th><th style={{ width: 130 }}>Checked with seller</th></tr></thead>
+          <thead><tr><th style={{ width: '20%' }}>Part</th><th style={{ width: 150 }}>Ours</th><th>Seller</th><th style={{ width: 150 }}>As listed</th><th style={{ width: 190 }}>vs ours</th><th style={{ width: 100 }}>Saving per machine</th><th style={{ width: 130 }}>Checked with seller</th></tr></thead>
           <tbody>
             {data.same_part.map((r) => (
               <tr key={r.part_id}>
-                <td><strong>{r.part_id}</strong> {r.item}<div className="small muted">{r.subsystem}</div></td>
-                <td className="small">{rupees(r.line_cost)}<div className="muted">{r.qty ?? 1} × {rupees(r.rate)}{r.gst != null && ` · ${rupees(r.line_cost * (1 + r.gst))} with ${Math.round(r.gst * 100)}% GST`}</div></td>
+                <td><strong>{r.part_id}</strong> {r.item}<div className="small muted">{r.part_number || r.subsystem}</div></td>
+                <td className="small"><Ours r={r} /></td>
                 <td><Option o={r.best_same} /></td>
                 <td className="small"><Listed o={r.best_same} /></td>
-                <td className="small"><Compared o={r.best_same} /></td>
-                <td className="ok-text"><strong>{rupees(r.best_same.saving_per_machine)}</strong></td>
+                <td className="small"><Versus o={r.best_same} /></td>
+                <td className="ok-text"><strong>{r.best_same.display.saving}</strong></td>
                 <td><Check o={r.best_same} onSaved={refresh} /></td>
               </tr>
             ))}
@@ -175,10 +165,10 @@ function Decisions({ data, refresh, live }) {
         </table>
       ) : <p className="muted tight">No other seller has the same part for less in this run.</p>}
 
-      <div className="section-label">2. Better or newer, fits ({data.upgrades.length})</div>
+      <div className="section-label">2. Better or newer: fits as is first, then minor, then major changes ({data.upgrades.length})</div>
       {data.upgrades.length ? (
         <table className="grid">
-          <thead><tr><th style={{ width: '20%' }}>Part</th><th style={{ width: '22%' }}>Option · seller</th><th>What is better</th><th style={{ width: 150 }}>Fit</th><th style={{ width: 150 }}>Per unit vs ours</th></tr></thead>
+          <thead><tr><th style={{ width: '20%' }}>Part</th><th style={{ width: '22%' }}>Option · maker · seller</th><th>What is better</th><th style={{ width: 150 }}>Fit</th><th style={{ width: 150 }}>As listed</th><th style={{ width: 190 }}>vs ours</th></tr></thead>
           <tbody>
             {data.upgrades.map((r) => (
               <tr key={r.part_id}>
@@ -187,7 +177,8 @@ function Decisions({ data, refresh, live }) {
                 <td className="small"><strong>{r.best_upgrade.offers.join(', ')}</strong> — {r.best_upgrade.why}
                   {!!r.best_upgrade.checks.length && <div className="muted">{r.best_upgrade.checks.map((c) => `${c.requirement}: ${c.status}`).join(' · ')}</div>}</td>
                 <td className="small"><Effort o={r.best_upgrade} />{r.best_upgrade.changes && <div className="muted">{r.best_upgrade.changes}</div>}</td>
-                <td className="small"><Compared o={r.best_upgrade} /></td>
+                <td className="small"><Listed o={r.best_upgrade} /></td>
+                <td className="small"><Versus o={r.best_upgrade} /></td>
               </tr>
             ))}
           </tbody>
@@ -197,15 +188,16 @@ function Decisions({ data, refresh, live }) {
       <div className="section-label">3. Cheaper alternatives: fits as is first, then needs adaptation ({data.alternatives.length})</div>
       {data.alternatives.length ? (
         <table className="grid">
-          <thead><tr><th style={{ width: '20%' }}>Part</th><th style={{ width: 100 }}>Ours, before GST</th><th>Option · seller</th><th style={{ width: 150 }}>Per unit vs ours</th><th style={{ width: 100 }}>Saving per machine</th><th>What would change</th></tr></thead>
+          <thead><tr><th style={{ width: '20%' }}>Part</th><th style={{ width: 150 }}>Ours</th><th>Option · maker · seller</th><th style={{ width: 150 }}>As listed</th><th style={{ width: 190 }}>vs ours</th><th style={{ width: 100 }}>Saving per machine</th><th>What would change</th></tr></thead>
           <tbody>
             {data.alternatives.map((r) => (
               <tr key={r.part_id}>
                 <td><strong>{r.part_id}</strong> {r.item}</td>
-                <td className="small">{rupees(r.line_cost)}<div className="muted">{r.qty ?? 1} × {rupees(r.rate)}{r.gst != null && ` · ${rupees(r.line_cost * (1 + r.gst))} with ${Math.round(r.gst * 100)}% GST`}</div></td>
+                <td className="small"><Ours r={r} /></td>
                 <td><Option o={r.best_alternative} /><div className="small"><Effort o={r.best_alternative} /></div></td>
-                <td className="small"><Compared o={r.best_alternative} /></td>
-                <td className="small">{rupees(r.best_alternative.saving_per_machine)}</td>
+                <td className="small"><Listed o={r.best_alternative} /></td>
+                <td className="small"><Versus o={r.best_alternative} /></td>
+                <td className="small">{r.best_alternative.display.saving}</td>
                 <td className="small">{r.best_alternative.effort === 'drop-in' ? 'Fits as is' : r.best_alternative.changes}</td>
               </tr>
             ))}
@@ -214,10 +206,11 @@ function Decisions({ data, refresh, live }) {
       ) : <p className="muted tight">None.</p>}
 
       <p className="small muted" style={{ marginTop: 12 }}>
-        Prices are compared in rupees per unit as our BOM counts it, before GST: the seller's own before-GST price, or their
-        GST-included price less our GST rate for the part. Options whose
-        fit the pages could not confirm are marked fit unclear and never shown in these three sections; every finding is in
-        the Parts tab. Prices are as listed on the day of the run; ask the
+        Seller prices are shown exactly as listed. Each is compared with ours on the same basis: with our GST added when their
+        price includes GST, before GST when it excludes GST or does not say. Price unclear: shown, never counted. Out of
+        stock, discontinued and non-rupee listings are dropped. A maker or authorised distributor is listed first when one
+        qualifies. Needs verification: the pages lack the facts to tell whether it fits; never an alternative, listed in the
+        Parts tab. Prices are as listed on the day of the run; ask the
         seller before ordering, then record whether the lead held.
       </p>
     </>
@@ -248,18 +241,18 @@ function Parts({ data }) {
         <span className="small muted">Highest cost per machine first. Click a part to see every finding.</span>
       </div>
       <table className="grid">
-        <thead><tr><th style={{ width: '24%' }}>Part</th><th style={{ width: 110 }}>Ours, before GST</th><th style={{ width: 170 }}>Verdict</th><th>Best option</th><th style={{ width: 80 }}>Findings</th></tr></thead>
+        <thead><tr><th style={{ width: '24%' }}>Part</th><th style={{ width: 110 }}>Ours, + GST</th><th style={{ width: 170 }}>Verdict</th><th>Best option</th><th style={{ width: 80 }}>Findings</th></tr></thead>
         <tbody>
           {rows.map((r) => {
             const shown = r.best || r.best_alternative
             return (
               <Fragment key={r.part_id}>
                 <tr className={findings[r.part_id] ? 'clickable' : ''} onClick={() => findings[r.part_id] && setOpen(open === r.part_id ? null : r.part_id)}>
-                  <td><strong>{r.part_id}</strong> {r.item}<div className="small muted">{r.subsystem}</div></td>
+                  <td><strong>{r.part_id}</strong> {r.item}<div className="small muted">{r.part_number || r.subsystem}</div></td>
                   <td className="small">{rupees(r.line_cost)}<div className="muted">{r.qty ?? 1} × {r.rate ? rupees(r.rate) : 'no rate'}{r.rate && r.gst != null && ` · ${rupees(r.line_cost * (1 + r.gst))} with ${Math.round(r.gst * 100)}% GST`}</div></td>
                   <td><span className={`tag ${VERDICT_TAG[r.verdict]}`}>{r.verdict}</span></td>
                   <td className="small">
-                    {shown ? <>{shown.product} · {shown.seller}{shown.diff_pct != null && <span className={shown.diff_pct < 0 ? 'ok-text' : 'muted'}> · {pct(shown.diff_pct)}</span>}</>
+                    {shown ? <>{shown.product} · {shown.display.seller}{shown.diff_pct != null && <span className={shown.diff_pct < 0 ? 'ok-text' : 'muted'}> · {pct(shown.diff_pct)}</span>}</>
                       : <span className="muted">{r.note}</span>}
                   </td>
                   <td className="small">{r.findings ? `${r.findings} ${open === r.part_id ? '▾' : '▸'}` : '—'}</td>
